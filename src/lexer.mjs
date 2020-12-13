@@ -496,24 +496,9 @@ function getIdRestRegexSuperSlow() {
   if (ID_CONTINUE_REGEX) return ID_CONTINUE_REGEX;
   return ID_CONTINUE_REGEX = createUnicodeRegex('^\\p{ID_Continue}$');
 }
-let SPACE_SEPARATOR_REGEX = undefined;
-function getSpaceSeparatorSuperSlow() {
-  if (!SPACE_SEPARATOR_REGEX) {
-    SPACE_SEPARATOR_REGEX = createUnicodeRegex('[\\p{Space_Separator}]');
-  }
-  return SPACE_SEPARATOR_REGEX;
-}
 function createUnicodeRegex(pattern) {
   try {
     return new RegExp(pattern,'u');
-  } catch(e) {
-    console.warn('Tenko: Current nodejs version does not suppport unicode regexes or regex property escapes; Input contains unicode that requires it so Tenko is unable to properly parse input (' + e.message + ')');
-    return /|/;
-  }
-}
-function createSpaceSeparatorRegex(pattern) {
-  try {
-    return new RegExp('[\\p{Space_Separator}]','u');
   } catch(e) {
     console.warn('Tenko: Current nodejs version does not suppport unicode regexes or regex property escapes; Input contains unicode that requires it so Tenko is unable to properly parse input (' + e.message + ')');
     return /|/;
@@ -533,6 +518,9 @@ function Lexer(
     gracefulErrors = FAIL_HARD,
     tokenStorageExternal,
     babelTokenCompat = false,
+
+    errorCodeFrame = true, // Print a code frame of input with context with errors?
+    truncCodeFrame = false, // Trunc large input codes to just a few lines around the point of error?
 
     // You can override the logging functions
     $log = console.log,
@@ -705,6 +693,8 @@ function Lexer(
       ++anyTokenCount;
       let startCol = pointer - currentColOffset;
       let startRow = currentLine;
+      lastCanonizedInput = '';
+      lastCanonizedInputLen = 0;
 
       nlwas = consumedNewlinesBeforeSolid; // Do not include the newlines for the token itself unless whitespace (ex: `` throw `\n` ``)
 
@@ -1021,9 +1011,6 @@ function Lexer(
   function parseAnyString(marker, lexerFlags) {
     ASSERT(parseAnyString.length === arguments.length, 'need 3 args');
     ASSERT(typeof lexerFlags === 'number', 'lexerFlags number');
-
-    lastCanonizedInput = '';
-    lastCanonizedInputLen = 0;
 
     let pointerOffset = pointer;
     let badEscape = false;
@@ -1452,9 +1439,6 @@ function Lexer(
     // - `...`                         // "pure", no expression components
     // - `...${expr}...`               // tick_head and tick_tail, no body
     // - `...${expr}...${expr}...`     // tick_head, tick_body (the middle part), and tick_tail
-
-    lastCanonizedInput = '';
-    lastCanonizedInputLen = 0;
 
     lastOffset = pointer;
     let badEscapes = false;
@@ -3612,7 +3596,7 @@ function Lexer(
           return regexSyntaxError(reason);
         }
       } else {
-        largestBackReference = Math.max(((c - $$0_30) * 10) + (d - $$0_30))
+        largestBackReference = Math.max(largestBackReference, ((c - $$0_30) * 10) + (d - $$0_30)); // TODO: test the case where largestBackReference was not properly maxed
       }
     } else {
       largestBackReference = Math.max(largestBackReference, c - $$0_30)
@@ -5117,7 +5101,8 @@ function Lexer(
     ASSERT_skip(d);
 
     let firstPart = (va << 12) | (vb << 8) | (vc << 4) | vd;
-    ASSERT(parseInt(String.fromCharCode(a, b, c, d), 16) === firstPart, 'confirm manual conversion works');
+
+    ASSERT(parseInt(String.fromCharCode(a, b, c, d), 16) === firstPart, 'confirm manual conversion works 1');
 
     // Pretty slow path but we're constructing a low+hi surrogate pair together here
     if (
@@ -5145,8 +5130,13 @@ function Lexer(
     let vg = getHexValue(g);
     let vh = getHexValue(h);
 
+    if ((ve | vf | vg | vh) > 15) {
+      // The invalid escape will be parsed next so no need to create an error here
+      return firstPart;
+    }
+
     let secondPart = (ve << 12) | (vf << 8) | (vg << 4) | vh;
-    ASSERT(parseInt(String.fromCharCode(e, f, g, h), 16) === secondPart, 'confirm manual conversion works');
+    ASSERT(parseInt(String.fromCharCode(e, f, g, h), 16) === secondPart, 'confirm manual conversion works 2');
 
     if (secondPart < 0xDC00 || secondPart > 0xDFFF) {
       return firstPart;
@@ -5335,16 +5325,14 @@ function Lexer(
     $error('Throwing this error:', str);
     _THROW('Lexer error! ' + str, tokenStart, tokenStop); // TODO: add str as second param?
   }
-  function _THROW(str, tokenStart, tokenStop, msg = '', fullErrorContext = false) {
-    $log('\n');
-    let ectxt = getErrorContext(tokenStart, tokenStop, msg, fullErrorContext);
-    ASSERT(ectxt[ectxt.length-1] === '\n', 'this is always the case so no need to append one, change if this changed');
-    let context = '\n`````\n' + ectxt + '`````\n';
+  function _THROW(str, tokenStart, tokenStop, msg = '', withCodeFrame = errorCodeFrame, fullCodeFrameLocal = truncCodeFrame) {
+    let ectxt = withCodeFrame ? getErrorContext(tokenStart, tokenStop, msg, fullCodeFrameLocal) : '';
+    let context = '\n`````\n' + (ectxt[ectxt.length-1] !== '\n' ? '\n' : '') + ectxt + '`````\n';
     $log('Error at:' + context);
-    if (gracefulErrors === FAIL_HARD) throw new Error(str + '\n\n' + ectxt);
+    if (gracefulErrors === FAIL_HARD) throw new Error(str + '\n' + (withCodeFrame ? '\n' : '') + ectxt);
     else $error(str);
   }
-  function getErrorContext(tokenStart, tokenStop, msg, fullErrorContext = false) {
+  function getErrorContext(tokenStart, tokenStop, msg, truncCodeFrame = false) {
     ASSERT(getErrorContext.length >= 2 && getErrorContext.length <= 4, 'arg count');
     ASSERT(tokenStart <= tokenStop, 'should have a positive length range', tokenStart, tokenStop);
 
@@ -5355,9 +5343,9 @@ function Lexer(
     // on newlines and determine the line numbers of other lines in the reported context that way.
 
     let inputOffset = 0;
-    if (!fullErrorContext && tokenStart > 100) inputOffset = tokenStart - 100;
+    if (truncCodeFrame && tokenStart > 100) inputOffset = tokenStart - 100;
     let inputLen = input.length - inputOffset;
-    if (!fullErrorContext && tokenStop + 100 < input.length) inputLen = (tokenStop + 100) - inputOffset;
+    if (truncCodeFrame && tokenStop + 100 < input.length) inputLen = (tokenStop + 100) - inputOffset;
 
     // Try to force-include the current offset if it's not too far away from the point of error (in some edge cases
     // it may still be megabytes away from each other and in that case we'll just omit the line/col reporting).
@@ -5426,7 +5414,6 @@ function Lexer(
 
     let lc = pointerLine;
     let pre2 = pre.map(s => ' ' + ('' + lc++).padStart(maxPointerlineLen, ' ') + ' ║ ' + s.trimRight()).join('\n');
-    // .log('\n\nPre: [' + pre + ']')
     let post2 = post.map(s => ' ' + ('' + lc++).padStart(maxPointerlineLen, ' ') + ' ║ ' + s.trimRight()).join('\n');
     if ((''+lc).length > maxPointerlineLen) {
       maxPointerlineLen = (''+lc).length;
@@ -5437,10 +5424,10 @@ function Lexer(
       pre2 = pre.map(s => ' ' + ('' + lc++).padStart(maxPointerlineLen, ' ') + ' ║ ' + s.trimRight()).join('\n');
       post2 = post.map(s => ' ' + ('' + lc++).padStart(maxPointerlineLen, ' ') + ' ║ ' + s.trimRight()).join('\n');
     }
-    // .log('\n\nPost: [' + pre + ']')
 
+    // The `usedInput` is a substring of input and starts mid-way a line. We want to know which column of that line.
     // Note: if the pointerLine is not 1 then the lastIndexOf must return a non-zero number that is the column on that line
-    let col = pointerLine === 1 ? inputOffset : usedInput.lastIndexOf(inputOffset);
+    let col = pointerLine === 1 ? inputOffset : ((inputOffset - input.lastIndexOf('\n', inputOffset))-1); // -1 to offset zero
 
     let top = 'start@' + pointerLine + ':' + (col<0?'?':col) + ', error@' + errorLine + ':' + (errorColumn<0?'?':errorColumn) + '\n';
     let bar = '═'.repeat(top.length - gutterWidth) + '\n';

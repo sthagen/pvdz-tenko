@@ -91,8 +91,10 @@ let p = (input, trimming) => {
     collectTokens: COLLECT_TOKENS_NONE,
     strictMode: false,
     webCompat: WEB_COMPAT_ON,
-    fullErrorContext: true,
     templateNewlineNormalization: false, // Fine for fuzzing. This way we can re-use the AST for a printer test
+
+    errorCodeFrame: false,
+    truncCodeFrame: false,
 
     // Collect output but don't print it in case the retry fails
     $log: (...args) => trimming || buffer.push(args), // shhh
@@ -163,7 +165,7 @@ function parseTenko(input, counts, trimming) {
   let z;
   try {
     counts.bytesParsed += input.length;
-    z = p(input, trimming);
+    z = p(input, false);
     if (!injectionMode) ++counts.tenkoPassedFuzz;
   } catch (e) {
     terror = e;
@@ -198,12 +200,21 @@ function cycle(input) {
   .replace(/[\u1680\u2000-\u200A\u202F\u205F\u3000]/g, ' ')
   // replace other unicode gunk to an x for printing (we can do separate unicode runs later)
   .replace(/([^\x20-\x7f\n\r])/ug, 'x');
+
+  if (TEST_NODE) {
+    // Scrub some known errors prematurely
+    input = input
+    .replace(/\b0\d+[eE]?\d*(?:\.\d+)?/g, '901')
+    .replace(/async\s+\n/g, 'async ') // classes with async newline
+  }
+
+
   buffer = [];
 
   let {z, e: zefailed} = parseTenko(input, counts, false);
 
   if (TEST_NODE) {
-    fuzzAgainstNode(input, zefailed, counts, injectionMode, parseTenko);
+    fuzzAgainstNode(input, zefailed, counts, injectionMode, parseTenko, `./t --module --annexb`);
   }
 
   if (z && !NO_PRINTER) {

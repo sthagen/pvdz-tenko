@@ -466,7 +466,6 @@ import {
   SCOPE_LAYER_FOR_HEADER,
   SCOPE_LAYER_BLOCK,
   SCOPE_LAYER_FUNC_PARAMS,
-  SCOPE_LAYER_TRY,
   SCOPE_LAYER_CATCH_HEAD,
   SCOPE_LAYER_CATCH_BODY,
   SCOPE_LAYER_FINALLY,
@@ -538,10 +537,12 @@ function Parser(code, options = {}) {
     targetEsVersion = VERSION_WHATEVER, // 6, 7, 8, 9, 10, 11, Infinity
     exposeScopes: options_exposeScopes = false, // put scopes in the AST under `$scope` property?
     astUids = false, // add an incremental uid to all ast nodes for debugging
-    fullErrorContext = false, // do not trunc the input when throwing an error?
     ranges: options_ranges = false, // Add `range` to each `loc` object for absolute start/stop index on input?
 
     templateNewlineNormalization = true, // normalize \r and \rn to \n in the `.raw` of template nodes? Estree spec says yes, but makes it hard to serialize lossless
+
+    errorCodeFrame = true, // Print input code at error point (you'll probably want this, it helps debugging a lot)
+    truncCodeFrame = true, // Print only context of error in the code frame? Or all the input regardless of size.
 
     // You can override the logging functions
     $log = console.log,
@@ -566,7 +567,7 @@ function Parser(code, options = {}) {
   if (typeof options_goalMode === 'string') {
     if (options_goalMode === 'module') goalMode = GOAL_MODULE;
     else if (options_goalMode === 'script') goalMode = GOAL_SCRIPT;
-    else return THROW_RANGE('Unknown goal symbol value: `' + options_goalMode + '`', tok_getStart(), tok_getStop());
+    else throw new Error('Unknown goal symbol value: `' + options_goalMode + '`');
   } else {
     goalMode = options_goalMode;
   }
@@ -576,7 +577,7 @@ function Parser(code, options = {}) {
     else if (options_collectTokens === 'solid') collectTokens = COLLECT_TOKENS_SOLID;
     else if (options_collectTokens === 'none') collectTokens = COLLECT_TOKENS_NONE;
     else if (options_collectTokens === 'types') collectTokens = COLLECT_TOKENS_TYPES;
-    else return THROW_RANGE('Unknown collectTokens value: `' + options_collectTokens + '`', tok_getStart(), tok_getStop());
+    else throw new Error('Unknown collectTokens value: `' + options_collectTokens + '`');
   } else {
     collectTokens = options_collectTokens;
   }
@@ -592,8 +593,11 @@ function Parser(code, options = {}) {
     returnTokens: babelCompat ? RETURN_COMMENT_TOKENS : RETURN_SOLID_TOKENS,
     webCompat: options_webCompat,
     gracefulErrors: FAIL_HARD,
-    tokenStorage: options_tokenStorage,
+    tokenStorageExternal: options_tokenStorage,
     babelTokenCompat,
+
+    errorCodeFrame,
+    truncCodeFrame,
 
     $log,
     $warn,
@@ -635,7 +639,7 @@ function Parser(code, options = {}) {
     }
   }
 
-  function ASSERT(bool, desc, ...rest) {
+  function ASSERT(bool, desc = '', ...rest) {
     if (!bool) {
       THROW_RANGE('Assertion fail: ' + (desc || '<no desc>') + '; ' + JSON.stringify(rest), tok_getStart(), tok_getStop(), ':', ...rest);
     }
@@ -663,7 +667,7 @@ function Parser(code, options = {}) {
     $log('Error in parser:', desc, 'remaining throw args;', args);
     // The "at eof" suffix also helps for reducing fuzz cases
     let fullErrmsg = 'Parser error! ' + desc + (tok_getType() === $EOF ? ' (at EOF)' : '');
-    tok_throw(fullErrmsg, tokenStart, tokenStop, '', fullErrorContext);
+    tok_throw(fullErrmsg, tokenStart, tokenStop, '');
   }
 
   let uid_counter = 0;
@@ -858,7 +862,7 @@ function Parser(code, options = {}) {
     ASSERT(typeof node === 'object' && (!node || typeof node.type === 'string'), 'should receive ast node to set or null', node);
     ASSERT(typeof astProp === 'string' && astProp !== 'undefined', 'prop should be string');
 
-    if (astUids) node.$uid = uid_counter++;
+    if (astUids && node) node.$uid = uid_counter++;
 
     let parentNode = _path[_path.length - 1];
 
@@ -2042,11 +2046,11 @@ function Parser(code, options = {}) {
 
     // while this comment probably gets lost, the name is `scoop` for greppability since `scope` is too generic
     let scoop = {
-      parent: null,
       type: SCOPE_LAYER_GLOBAL,
       names: HAS_NO_BINDINGS, // Map (when necessary)
       dupeParamErrorStart: NO_DUPE_PARAMS, // 0 means "none", otherwise it's the linear (offset + 1) of the token, a value that is only used for reporting an error anyways
       dupeParamErrorStop: NO_DUPE_PARAMS, // (offset 0)
+      parent: null,
     };
 
     ASSERT(scoop._type = S(SCOPE_LAYER_GLOBAL), '(debugging)');
@@ -2058,21 +2062,22 @@ function Parser(code, options = {}) {
   function SCOPE_addLayer(scoop, scopeType, desc) {
     ASSERT(SCOPE_addLayer.length === arguments.length, 'arg count');
     ASSERT(typeof desc === 'string', 'desc debug is string', desc);
-    ASSERT([SCOPE_LAYER_GLOBAL, SCOPE_LAYER_FOR_HEADER, SCOPE_LAYER_BLOCK, SCOPE_LAYER_FUNC_PARAMS, SCOPE_LAYER_ARROW_PARAMS, SCOPE_LAYER_TRY, SCOPE_LAYER_CATCH_HEAD, SCOPE_LAYER_CATCH_BODY, SCOPE_LAYER_FINALLY, SCOPE_LAYER_SWITCH, SCOPE_LAYER_FUNC_ROOT, SCOPE_LAYER_FUNC_BODY, SCOPE_LAYER_FAKE_BLOCK].includes(scopeType), 'scopeType enum', scopeType);
+    ASSERT([SCOPE_LAYER_GLOBAL, SCOPE_LAYER_FOR_HEADER, SCOPE_LAYER_BLOCK, SCOPE_LAYER_FUNC_PARAMS, SCOPE_LAYER_ARROW_PARAMS, SCOPE_LAYER_CATCH_HEAD, SCOPE_LAYER_CATCH_BODY, SCOPE_LAYER_FINALLY, SCOPE_LAYER_SWITCH, SCOPE_LAYER_FUNC_ROOT, SCOPE_LAYER_FUNC_BODY, SCOPE_LAYER_FAKE_BLOCK].includes(scopeType), 'scopeType enum', scopeType);
     ASSERT(scoop === DO_NOT_BIND || scoop.isScope, 'expecting scoop', scoop);
 
     let scoopNew = {
-      parent: scoop,
       type: scopeType,
       names: HAS_NO_BINDINGS, // Map (when necessary)
       // For arrows, dupe params can only be checked when seeing the arrow. `([a,a]);` is fine.
       // For function declarations in sloppy, this can only be validated once the inner directives are parsed
       dupeParamErrorStart: NO_DUPE_PARAMS, // 0 means "none", otherwise it's the linear (offset + 1) of the token, a value that is only used for reporting an error anyways
       dupeParamErrorStop: NO_DUPE_PARAMS, // 0 means "none", otherwise it's the linear (offset + 1) of the token, a value that is only used for reporting an error anyways
+      parent: scoop,
     };
     ASSERT(scoopNew._type = S(scopeType), '(debugging)');
     ASSERT(scoopNew.isScope = true, '(debugging)');
     ASSERT(scoopNew._desc = desc + '.scope', '(debugging)');
+    if (astUids) scoop.$uid = uid_counter++;
     return scoopNew;
   }
   function SCOPE_addFuncDeclName(lexerFlags, scoop, $tp_bindingIdent_start, $tp_bindingIdent_stop, $tp_bindingIdent_canon, bindingType, fdState) {
@@ -2121,7 +2126,7 @@ function Parser(code, options = {}) {
     ASSERT(scoop === DO_NOT_BIND || scoop.names === HAS_NO_BINDINGS || scoop.names instanceof Map, 'if scoop has names, it must be a Map', scoop.names);
     ASSERT_BINDING_TYPE(bindingType);
 
-    if (bindingType === BINDING_TYPE_VAR) {
+    if (bindingType === BINDING_TYPE_VAR || bindingType === BINDING_TYPE_FUNC_VAR) {
       SCOPE_addVarBinding(lexerFlags, scoop, $tp_bindingIdent_start, $tp_bindingIdent_stop, $tp_bindingIdent_canon, bindingType);
     }
     else {
@@ -3043,7 +3048,7 @@ function Parser(code, options = {}) {
     ASSERT($tp_async_type !== $ID_async || $tp_star_type !== $PUNC_STAR || allowAsyncGenerators, 'other places that parse `async` with a generator that lead here should have verified the es version by now');
 
     let innerScoop = SCOPE_createGlobal('parseFunctionAfterKeyword_main_func_scope');
-    ASSERT(innerScoop._ = 'func scope');
+    ASSERT(innerScoop._ = 'func scope (NOT "global") but the top-most scope layer for this function');
 
     // need to track whether the name was eval/args because if the func body is strict mode then it should still throw
     // retroactively for having that name. a bit annoying.
@@ -3077,7 +3082,7 @@ function Parser(code, options = {}) {
         isFuncDecl === IS_FUNC_DECL &&
         fdState === FDS_VAR &&
         (hasNoFlag(lexerFlags, LF_IN_GLOBAL) || goalMode === GOAL_SCRIPT)
-      ) || $tp_functionNameToVerify_type === $ID_let ? BINDING_TYPE_FUNC_VAR : BINDING_TYPE_FUNC_LEX;
+      ) ? BINDING_TYPE_FUNC_VAR : BINDING_TYPE_FUNC_LEX;
 
       canonName = $tp_functionNameToVerify_canon;
 
@@ -3091,6 +3096,10 @@ function Parser(code, options = {}) {
       if (isFuncDecl === IS_FUNC_DECL) {
         // TODO: add test case for catch shadow
         SCOPE_addFuncDeclName(lexerFlags, outerScoop, $tp_functionNameToVerify_start, $tp_functionNameToVerify_stop, canonName, nameBindingType, fdState);
+      } else {
+        // Record the func expr name in the current layer, allow it to be shadowed.
+        // TODO: I believe this is read-only. I'm just adding this to unblock something else. But I guess there are tests to be created for shadowing / writing to a func expr name.
+        SCOPE_actuallyAddBinding(lexerFlags, innerScoop, $tp_functionNameToVerify_start, $tp_functionNameToVerify_stop, canonName, BINDING_TYPE_FUNC_VAR);
       }
 
       // create new lexical binding to "hide" the function name.
@@ -3104,6 +3113,7 @@ function Parser(code, options = {}) {
       return THROW_RANGE('Function decl missing required ident', tok_getStart(), tok_getStop()); // Pointing to `function` is probably better...?
     } else {
       AST_set('id', null);
+      innerScoop = SCOPE_addLayer(innerScoop, SCOPE_LAYER_FUNC_ROOT, 'function_has_no_id_but_whatever');
     }
 
     // reset the async lexer flags. some don't cross function boundaries
@@ -3242,7 +3252,7 @@ function Parser(code, options = {}) {
     let finalFuncScope = SCOPE_addLayer(paramScoop, SCOPE_LAYER_FUNC_BODY, 'parseFunctionFromParams(body)');
     ASSERT(!void(finalFuncScope._funcName = $tp_functionNameToVerify_start === 0 ? '<anon>' : tok_sliceInput($tp_functionNameToVerify_start, $tp_functionNameToVerify_stop)));
     if (options_exposeScopes) AST_set('$scope', finalFuncScope);
-    parseFunctionBody(lexerFlags, finalFuncScope, expressionState, paramsSimple, dupeParamErrorStart, dupeParamErrorStop, $tp_functionNameToVerify_type, $tp_functionNameToVerify_start, $tp_functionNameToVerify_stop, $tp_functionNameToVerify_canon);
+    parseFunctionBody(lexerFlags, finalFuncScope, expressionState, paramsSimple, dupeParamErrorStart, dupeParamErrorStop, $tp_functionNameToVerify_type, $tp_functionNameToVerify_start, $tp_functionNameToVerify_stop, $tp_functionNameToVerify_canon, false);
   }
   function parseFuncArguments(lexerFlags, scoop, bindingFrom, $tp_get_type, $tp_set_type) {
     // parseArguments
@@ -3303,7 +3313,7 @@ function Parser(code, options = {}) {
     return paramsSimple;
   }
 
-  function parseFunctionBody(lexerFlags, scoop, blockType, paramsSimple, dupeParamErrorStart, dupeParamErrorStop, $tp_functionNameToVerify_type, $tp_functionNameToVerify_start, $tp_functionNameToVerify_stop, $tp_functionNameToVerify_canon) {
+  function parseFunctionBody(lexerFlags, scoop, blockType, paramsSimple, dupeParamErrorStart, dupeParamErrorStop, $tp_functionNameToVerify_type, $tp_functionNameToVerify_start, $tp_functionNameToVerify_stop, $tp_functionNameToVerify_canon, isArrow) {
     ASSERT(parseFunctionBody.length === arguments.length, 'arg count');
     ASSERT(typeof lexerFlags === 'number', 'lexerFlags number');
     ASSERT(typeof lexerFlags === 'number');
@@ -3322,6 +3332,7 @@ function Parser(code, options = {}) {
       loc: undefined,
       body: [],
     });
+
     if (options_exposeScopes) AST_set('$scope', scoop);
 
     parseBodyPartsWithDirectives(lexerFlagsNoTemplate, scoop, UNDEF_EXPORTS, UNDEF_EXPORTS, paramsSimple, dupeParamErrorStart, dupeParamErrorStop, $tp_functionNameToVerify_type, $tp_functionNameToVerify_start, $tp_functionNameToVerify_stop, $tp_functionNameToVerify_canon, NOT_GLOBAL_TOPLEVEL, 'body');
@@ -3331,8 +3342,15 @@ function Parser(code, options = {}) {
       return THROW_RANGE('Missing function body closing curly, found `' + tok_sliceInput(tok_getStart(), tok_getStop()) + '` instead', tok_getStart(), tok_getStop());
     }
 
-    if (blockType === IS_EXPRESSION) {
-      // arrow with block, function expression
+    if (isArrow) {
+      // block arrow cannot be lhs of expression, so division must be regex, on the next line
+      ASSERT_skipRex($PUNC_CURLY_CLOSE, lexerFlags);
+      if (tok_getNlwas() === true && isRegexToken(tok_getType())) {
+        // [v] `()=>{} \n /foo/`
+        ASSERT_ASI_REGEX_NEXT = true;
+      }
+    } else if (blockType === IS_EXPRESSION) {
+      // function expression
       ASSERT_skipDiv($PUNC_CURLY_CLOSE, lexerFlags);
     } else {
       ASSERT(blockType === IS_STATEMENT, 'either expression or not');
@@ -4833,10 +4851,6 @@ function Parser(code, options = {}) {
     // either be a binary (or even unary) operator (in, of, or anything else) or
     // a semi. we can then proceed parsing down that particular path.
 
-    // the for-header adds a special lex scope because there are special let/const/var rules in place we need to verify
-    scoop = SCOPE_addLayer(scoop, SCOPE_LAYER_FOR_HEADER, 'parseForStatement(header)');
-    ASSERT(scoop._funcName = '(for has no name)');
-
     let $tp_for_line = tok_getLine();
     let $tp_for_column = tok_getColumn();
     let $tp_for_start = tok_getStart();
@@ -4846,7 +4860,6 @@ function Parser(code, options = {}) {
 
     let awaitable = tok_getType() === $ID_await;
     if (awaitable) {
-
       let $tp_await_stop = tok_getStop();
 
       if (!allowAsyncGenerators) {
@@ -4861,13 +4874,27 @@ function Parser(code, options = {}) {
     } else if (tok_getType() !== $PUNC_PAREN_OPEN) {
       return THROW_RANGE('Missing opening paren of the `for` header, found `' + tok_sliceInput(tok_getStart(), tok_getStop()) + '` instead', $tp_for_start, $tp_for_stop);
     }
+
     ASSERT_skipToExpressionStartSemi($PUNC_PAREN_OPEN, lexerFlags);
+
+    // If the next token is `var`, `let` or `const` then create a new scope layer. TODO: what about legacy `let` usage?
+    // the for-header adds a special lex scope because there are special let/const/var rules in place we need to verify
+    let hasOwnScope = false;
+    if (tok_getType() === $ID_let || tok_getType() === $ID_const || tok_getType() === $ID_var) {
+      scoop = SCOPE_addLayer(scoop, SCOPE_LAYER_FOR_HEADER, 'parseForStatement(header)');
+      ASSERT(scoop._funcName = '(for has no name)');
+      hasOwnScope = true;
+    }
+
     parseForHeader(sansFlag(lexerFlags | LF_NO_ASI, LF_IN_GLOBAL | LF_IN_SWITCH | LF_IN_ITERATION), $tp_for_start, scoop, awaitable, astProp);
     if (tok_getType() !== $PUNC_PAREN_CLOSE) {
       return THROW_RANGE('Missing closing paren of the `for` header, found `' + tok_sliceInput(tok_getStart(), tok_getStop()) + '` instead', tok_getStart(), tok_getStop());
     }
     ASSERT_skipToStatementStart($PUNC_PAREN_CLOSE, lexerFlags);
     parseNestedBodyPart(lexerFlags | LF_IN_ITERATION, scoop, labelSet, NOT_LABELLED, FDS_ILLEGAL, PARENT_NOT_LABEL, 'body');
+
+    if (hasOwnScope && options_exposeScopes) AST_set('$scope', scoop);
+
     AST_close($tp_for_start, $tp_for_line, $tp_for_column, ['ForStatement', 'ForInStatement', 'ForOfStatement']);
   }
   function parseForHeaderVar(lexerFlags, scoop, astProp) {
@@ -4889,7 +4916,7 @@ function Parser(code, options = {}) {
     // var decls are assignable
     return IS_ASSIGNABLE;
   }
-  function parseForHeaderLet(lexerFlags, $tp_for_start, scoop, astProp) {
+  function parseForHeaderLet(lexerFlags, $tp_for_start, $tp_startOfForHeader_start, $tp_startOfForHeader_stop, $tp_startOfForHeader_line, $tp_startOfForHeader_column, scoop, astProp) {
     ASSERT(parseForHeaderLet.length === arguments.length, 'arg count');
 
     // - `for (let x of y);`
@@ -4905,11 +4932,12 @@ function Parser(code, options = {}) {
 
     ASSERT_skipDiv($ID_let, lexerFlags); // div; if let is varname then next token can be next line statement start and if that starts with forward slash it's a div
 
+    let $tp_letArg_type = tok_getType();
     let $tp_letArg_stop = tok_getStop();
 
     // [v]: `for (let x of y);`
     //                ^
-    if (isIdentToken(tok_getType())) {
+    if (isIdentToken($tp_letArg_type)) {
       // [v]: `for (let x in y);`
       //                ^
       // [v]: `for (let x of y);`
@@ -4920,9 +4948,8 @@ function Parser(code, options = {}) {
       //                ^
       // [x]: `for (let of y);`
       //                ^
-      if (tok_getType() === $ID_in) {
+      if ($tp_letArg_type === $ID_in) {
         // Edge case makes `let` to be parsed as a var name in sloppy mode
-        // TODO: actually, this is probably a syntax error because static semantics are applied after locking in parser choices...
         // [v]: `for (let in x)`
         //                ^^
         if (hasAllFlags(lexerFlags, LF_STRICT_MODE)) {
@@ -4935,7 +4962,7 @@ function Parser(code, options = {}) {
         return IS_ASSIGNABLE; // the `let` variable name is assignable
       }
 
-      if (tok_getType() === $ID_of) {
+      if ($tp_letArg_type === $ID_of) {
         // [x]: `for (let of y);`
         //                ^^
         return THROW_RANGE('A `for (let of ...)` is always illegal', $tp_for_start, $tp_letArg_stop);
@@ -4948,7 +4975,7 @@ function Parser(code, options = {}) {
       return IS_ASSIGNABLE; // decls are assignable
     }
 
-    if (tok_getType() === $PUNC_BRACKET_OPEN || tok_getType() === $PUNC_CURLY_OPEN) {
+    if ($tp_letArg_type === $PUNC_BRACKET_OPEN || $tp_letArg_type === $PUNC_CURLY_OPEN) {
       // [x]: `for (let [x] in y);`
       //                ^
       // [v]: `for (let {x} of y);`
@@ -4995,11 +5022,11 @@ function Parser(code, options = {}) {
     // [x]: `for (let() of y);`
     // [v]: `for (let();;);`
 
-    ASSERT(tok_getType() !== $PUNC_BRACKET_CLOSE, 'case handled above');
-    ASSERT(tok_getType() !== $ID_in, 'case handled above');
-    ASSERT(tok_getType() !== $ID_of, 'case handled above');
+    ASSERT($tp_letArg_type !== $PUNC_BRACKET_CLOSE, 'case handled above');
+    ASSERT($tp_letArg_type !== $ID_in, 'case handled above');
+    ASSERT($tp_letArg_type !== $ID_of, 'case handled above');
 
-    if (tok_getType() === $PUNC_SEMI) {
+    if ($tp_letArg_type === $PUNC_SEMI) {
       // [v]: `for (let;;);`
       //               ^
       AST_setIdent(astProp, $tp_letIdent_start, $tp_letIdent_stop, $tp_letIdent_line, $tp_letIdent_column, $tp_letIdent_canon);
@@ -5020,6 +5047,8 @@ function Parser(code, options = {}) {
     //                ^
 
     let assignable = parseValueAfterIdent(lexerFlags, $tp_letIdent_type, $tp_letIdent_start, $tp_letIdent_stop, $tp_letIdent_line, $tp_letIdent_column, $tp_letIdent_canon, BINDING_TYPE_NONE, ASSIGN_EXPR_IS_OK, astProp);
+
+    assignable = parseExpressionFromOp(lexerFlags | LF_IN_FOR_LHS, $tp_startOfForHeader_start, $tp_startOfForHeader_stop, $tp_startOfForHeader_line, $tp_startOfForHeader_column, assignable, astProp);
 
     if (tok_getType() === $ID_of) {
       // [x]: `for (let.a of x);`
@@ -5182,16 +5211,16 @@ function Parser(code, options = {}) {
     // - `for (x of y);`
     //         ^
 
-    let $tp_lhs_line = tok_getLine();
-    let $tp_lhs_column = tok_getColumn();
-    let $tp_lhs_start = tok_getStart();
-    let $tp_lhs_stop = tok_getStop();
+    let $tp_startOfForHeader_line = tok_getLine();
+    let $tp_startOfForHeader_column = tok_getColumn();
+    let $tp_startOfForHeader_start = tok_getStart();
+    let $tp_startOfForHeader_stop = tok_getStop();
 
-    let assignable = parseForHeaderLhs(lexerFlags, $tp_for_start, scoop, astProp);
+    let assignable = parseForHeaderLhs(lexerFlags, $tp_for_start, $tp_startOfForHeader_start, $tp_startOfForHeader_stop, $tp_startOfForHeader_line, $tp_startOfForHeader_column, scoop, astProp);
 
-    return parseForHeaderRest(lexerFlags, $tp_for_start, $tp_lhs_start, $tp_lhs_stop, $tp_lhs_line, $tp_lhs_column, awaitable, assignable, astProp);
+    return parseForHeaderRest(lexerFlags, $tp_for_start, $tp_startOfForHeader_start, $tp_startOfForHeader_stop, $tp_startOfForHeader_line, $tp_startOfForHeader_column, awaitable, assignable, astProp);
   }
-  function parseForHeaderLhs(lexerFlags, $tp_for_start, scoop, astProp) {
+  function parseForHeaderLhs(lexerFlags, $tp_for_start, $tp_startOfForHeader_start, $tp_startOfForHeader_stop, $tp_startOfForHeader_line, $tp_startOfForHeader_column, scoop, astProp) {
     ASSERT(parseForHeaderLhs.length === arguments.length, 'arg count');
 
     switch (tok_getType()) {
@@ -5199,7 +5228,7 @@ function Parser(code, options = {}) {
         return parseForHeaderVar(lexerFlags, scoop, astProp);
 
       case $ID_let:
-        return parseForHeaderLet(lexerFlags, $tp_for_start, scoop, astProp);
+        return parseForHeaderLet(lexerFlags, $tp_for_start, $tp_startOfForHeader_start, $tp_startOfForHeader_stop, $tp_startOfForHeader_line, $tp_startOfForHeader_column, scoop, astProp);
 
       case $ID_const:
         return parseForHeaderConst(lexerFlags, scoop, astProp);
@@ -5215,7 +5244,11 @@ function Parser(code, options = {}) {
         return parseForHeaderBracket(lexerFlags, astProp);
     }
 
-    return parseForHeaderOther(lexerFlags, astProp);
+    let assignable = parseForHeaderOther(lexerFlags, astProp);
+    // we are still in the `init` part of a classic for. keep parsing _with_ LF_IN_FOR_LHS from the current expression value.
+    // [v]: `for (a+b;;) c;`
+    //             ^
+    return parseExpressionFromOp(lexerFlags | LF_IN_FOR_LHS, $tp_startOfForHeader_start, $tp_startOfForHeader_stop, $tp_startOfForHeader_line, $tp_startOfForHeader_column, assignable, astProp);
   }
   function parseForHeaderRest(lexerFlags, $tp_for_start, $tp_startOfForHeader_start, $tp_startOfForHeader_stop, $tp_startOfForHeader_line, $tp_startOfForHeader_column, awaitable, assignable, astProp) {
     ASSERT(parseForHeaderRest.length === arguments.length, 'arg count');
@@ -5252,10 +5285,7 @@ function Parser(code, options = {}) {
       body: undefined,
     }, 'init');
 
-    // we are still in the `init` part of a classic for. keep parsing _with_ LF_IN_FOR_LHS from the current expression value.
-    // [v]: `for (a+b;;) c;`
-    //             ^
-    parseExpressionFromOp(lexerFlags | LF_IN_FOR_LHS, $tp_startOfForHeader_start, $tp_startOfForHeader_stop, $tp_startOfForHeader_line, $tp_startOfForHeader_column, assignable, 'init');
+    // parseExpressionFromOp(lexerFlags | LF_IN_FOR_LHS, $tp_startOfForHeader_start, $tp_startOfForHeader_stop, $tp_startOfForHeader_line, $tp_startOfForHeader_column, assignable, 'init');
 
     return parseForFromSemi(lexerFlags, $tp_startOfForHeader_start, $tp_startOfForHeader_line, $tp_startOfForHeader_column);
   }
@@ -5942,6 +5972,12 @@ function Parser(code, options = {}) {
       return parseLabeledStatementInstead(lexerFlags, scoop, labelSet, $tp_ident_type, $tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon, fdState, nestedLabels, astProp);
     }
 
+    let $tp_next_type = tok_getType();
+
+    if ($tp_next_type === $ID_in || $tp_next_type === $ID_in) {
+      return THROW_RANGE('Cannot use `let` as a regular var name as the lhs of `in` or `instanceof` in a toplevel expression statement', tok_getStart(), tok_getStop()); // And why would you.
+    }
+
     AST_open(astProp, {
       type: 'ExpressionStatement',
       loc: undefined,
@@ -6023,6 +6059,7 @@ function Parser(code, options = {}) {
     ASSERT_skipToSwitchBody($PUNC_CURLY_OPEN, lexerFlagsForSwitch);
 
     let casesScoop = SCOPE_addLayer(scoop, SCOPE_LAYER_SWITCH, 'parseSwitchStatement');
+    if (options_exposeScopes) AST_set('$scope', casesScoop);
     ASSERT(casesScoop._funcName = '(switch has no name)');
     parseSwitchCases(lexerFlagsForSwitch | LF_IN_SWITCH, casesScoop, labelSet, 'cases');
 
@@ -6118,9 +6155,7 @@ function Parser(code, options = {}) {
       finalizer: undefined,
     });
 
-    let tryScoop = SCOPE_addLayer(scoop, SCOPE_LAYER_TRY, 'parseTryStatement(try)');
-    ASSERT(tryScoop._funcName = '(try has no name)');
-    parseBlockStatement(lexerFlags, tryScoop, labelSet, 'block');
+    parseBlockStatement(lexerFlags, scoop, labelSet, 'block');
 
     let hasEither = false;
     if (tok_getType() === $ID_catch) {
@@ -6149,6 +6184,8 @@ function Parser(code, options = {}) {
       // create a scope for the catch body. this way var decls can search for the catch scope to assert new vars
       let catchBodyScoop = SCOPE_addLayer(catchHeadScoop, SCOPE_LAYER_CATCH_BODY, 'parseTryStatement(catch-body)');
       ASSERT(catchBodyScoop._funcName = '(catch has no name)');
+
+      if (options_exposeScopes) AST_set('$scope', catchBodyScoop);
 
       // Catch clause is optional since es10
 
@@ -6406,6 +6443,7 @@ function Parser(code, options = {}) {
       loc: undefined,
       expression: undefined,
     });
+
     // Note: an arrow would create a new scope and there is no other way to introduce a new binding from here on out
     parseExpressions(lexerFlags, 'expression');
     parseSemiOrAsi(lexerFlags);
@@ -8654,7 +8692,8 @@ function Parser(code, options = {}) {
               object: AST_popNode(astProp),
               property: AST_getIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon),
             });
-          } else if ($tp_q_type === $PUNC_BRACKET_OPEN) {
+          }
+          else if ($tp_q_type === $PUNC_BRACKET_OPEN) {
             // [v]: `value?.[x]`
             //              ^
 
@@ -8678,7 +8717,8 @@ function Parser(code, options = {}) {
             ASSERT_skipDiv($PUNC_BRACKET_CLOSE, lexerFlags);
 
             AST_close($tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column,'OptionalMemberExpression');
-          } else if ($tp_q_type === $PUNC_PAREN_OPEN) {
+          }
+          else if ($tp_q_type === $PUNC_PAREN_OPEN) {
             // [v]: `value?.(x)`
             //              ^
 
@@ -8695,11 +8735,16 @@ function Parser(code, options = {}) {
             assignable = mergeAssignable(nowAssignable, assignable);
 
             AST_close($tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, 'OptionalCallExpression');
-          } else if (isTemplateStart($tp_q_type)) {
+          }
+          else if (isTemplateStart($tp_q_type)) {
             // [v]: `` value?.`x` ``
             //                ^
 
             return THROW_RANGE('An value containing the optional chaining operator cannot be followed by a template', tok_getStart(), tok_getStop());
+          }
+          else if ($tp_q_type === $PUNC_QMARK_DOT) {
+            // [x]: `a?.?.b`
+            return THROW_RANGE('Cannot cannot `?.?.`, must have something in between', tok_getStart(), tok_getStop())
           }
 
           break;
@@ -8853,6 +8898,7 @@ function Parser(code, options = {}) {
     let nowAssignable = parseExpressions(sansFlag(lexerFlags | LF_NO_ASI, LF_IN_FOR_LHS | LF_IN_GLOBAL | LF_IN_SWITCH | LF_IN_ITERATION), 'property');
     // - `foo[await bar]`
     assignable = mergeAssignable(nowAssignable, assignable); // pass on piggies (yield, await, etc)
+    assignable = sansFlag(assignable, PIGGY_BACK_WAS_ARROW); // should not leak; `a[b=>c] in d` should pass
 
     if (tok_getType() !== $PUNC_BRACKET_CLOSE) {
       return THROW_RANGE('Expected the closing bracket `]` for a dynamic property, found `' + tok_sliceInput(tok_getStart(), tok_getStop()) + '` instead', tok_getStart(), tok_getStop());
@@ -9180,7 +9226,12 @@ function Parser(code, options = {}) {
 
       let arrowScoop = SCOPE_addLayer(paramScoop, SCOPE_LAYER_FUNC_BODY, 'parseArrowFromPunc');
       ASSERT(arrowScoop._funcName = '(arrow has no name)');
-      parseFunctionBody(lexerFlags, arrowScoop, IS_EXPRESSION, paramsSimple, NO_DUPE_PARAMS, NO_DUPE_PARAMS, $UNTYPED, 0, 0, '');
+      // For all intentions and purposes, the next token after this arrow cannot be a division.
+      // If it's a regular expression it must be on the next line.
+      parseFunctionBody(lexerFlags, arrowScoop, IS_EXPRESSION, paramsSimple, NO_DUPE_PARAMS, NO_DUPE_PARAMS, $UNTYPED, 0, 0, '', true);
+      if (isRegexToken(tok_getType()) && !tok_getNlwas()) {
+        THROW_RANGE('Found a regex or division after an arrow, that is illegal', tok_getStart(), tok_getStop())
+      }
     } else {
       // Note: you cannot await in a regular arrow, so this is illegal:
       // - `async function f(fail = () => await x){}`
@@ -9272,7 +9323,7 @@ function Parser(code, options = {}) {
     let $tp_firstTokenAfterParen_column = tok_getColumn();
     let $tp_firstTokenAfterParen_start = tok_getStart();
 
-    // notable remarks;
+    // Notable remarks;
     // - empty group `()` is the only one that must be followed by an arrow (`=>`) unless async
     // - if a group has a top level assignable it is only ever assignable if the group does not have a comma
     // - the `(x)` case is the only case to be compoundable (so `(x.y)+=z` is not valid)
@@ -13486,12 +13537,11 @@ function B(b) {
   ASSERT(false, 'B: unknown binding enum type: ' + b);
 }
 function S(s) {
-  ASSERT([SCOPE_LAYER_GLOBAL, SCOPE_LAYER_FOR_HEADER, SCOPE_LAYER_BLOCK, SCOPE_LAYER_FUNC_PARAMS, SCOPE_LAYER_ARROW_PARAMS, SCOPE_LAYER_TRY, SCOPE_LAYER_CATCH_HEAD, SCOPE_LAYER_CATCH_BODY, SCOPE_LAYER_FINALLY, SCOPE_LAYER_SWITCH, SCOPE_LAYER_FUNC_ROOT, SCOPE_LAYER_FUNC_BODY, SCOPE_LAYER_FAKE_BLOCK].includes(s), 'scopeType enum', s);
+  ASSERT([SCOPE_LAYER_GLOBAL, SCOPE_LAYER_FOR_HEADER, SCOPE_LAYER_BLOCK, SCOPE_LAYER_FUNC_PARAMS, SCOPE_LAYER_ARROW_PARAMS, SCOPE_LAYER_CATCH_HEAD, SCOPE_LAYER_CATCH_BODY, SCOPE_LAYER_FINALLY, SCOPE_LAYER_SWITCH, SCOPE_LAYER_FUNC_ROOT, SCOPE_LAYER_FUNC_BODY, SCOPE_LAYER_FAKE_BLOCK].includes(s), 'scopeType enum', s);
   if (s === SCOPE_LAYER_GLOBAL) return 'SCOPE_LAYER_GLOBAL';
   if (s === SCOPE_LAYER_FOR_HEADER) return 'SCOPE_LAYER_FOR_HEADER';
   if (s === SCOPE_LAYER_BLOCK) return 'SCOPE_LAYER_BLOCK';
   if (s === SCOPE_LAYER_FUNC_PARAMS) return 'SCOPE_LAYER_FUNC_PARAMS';
-  if (s === SCOPE_LAYER_TRY) return 'SCOPE_LAYER_TRY';
   if (s === SCOPE_LAYER_CATCH_HEAD) return 'SCOPE_LAYER_CATCH_HEAD';
   if (s === SCOPE_LAYER_CATCH_BODY) return 'SCOPE_LAYER_CATCH_BODY';
   if (s === SCOPE_LAYER_FINALLY) return 'SCOPE_LAYER_FINALLY';

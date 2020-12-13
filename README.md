@@ -21,7 +21,7 @@ REPL: https://pvdz.github.io/tenko/repl
   - Supports location data (matching Acorn/Babel for reference)
 - Tests
   - 33k input syntax tests
-  - Passes test262 suite (at least February 2020)
+  - Passes test262 suite (at least as per March 2020), without exception
 
 # Name
 
@@ -78,8 +78,10 @@ const {
     exposeScopes = false,
     // Assign each node a unique incremental id
     astUids = false,
-    // When false and input is over 100 bytes, it will trunc the input
-    fullErrorContext = false,
+    // Do you want to print a code frame with error messages? (Part of the input around the point of error)
+    errorCodeFrame = true,
+    // For the code frame, do you want to always show the entire input, regardless of size? Or just a small context
+    truncCodeFrame = true,
     // You can override the logging functions to catch or squash all output
     $log = console.log,
     $warn = console.warn,

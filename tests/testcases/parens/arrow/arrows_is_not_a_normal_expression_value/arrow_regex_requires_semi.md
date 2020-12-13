@@ -8,8 +8,6 @@
 
 ## Input
 
-- `requireAst = true`
-
 `````js
 a => {} /x/
 `````
@@ -28,12 +26,12 @@ Parsed with script goal and as if the code did not start with strict mode header
 
 `````
 throws: Parser error!
-  An arrow function can not be part of an operator to the right
+  Found a regex or division after an arrow, that is illegal
 
 start@1:0, error@1:8
 ╔══╦════════════════
  1 ║ a => {} /x/
-   ║         ^------- error
+   ║         ^^^------- error
 ╚══╩════════════════
 
 `````

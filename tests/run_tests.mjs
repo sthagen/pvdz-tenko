@@ -98,6 +98,7 @@ const NO_FATALS = process.argv.includes('--no-fatals'); // asserts should not st
 const CONCISE = process.argv.includes('--concise');
 const USE_BUILD = process.argv.includes('-b') || process.argv.includes('--build');
 const SKIP_PRINTER = process.argv.includes('--no-printer'); // || USE_BUILD;
+const EXPOSE_SCOPE = process.argv.includes('--expose-scope');
 
 const TENKO_DEV_FILE = '../src/index.mjs';
 const TENKO_PROD_FILE = '../build/tenko.prod.mjs';
@@ -151,6 +152,7 @@ if (process.argv.includes('-?') || process.argv.includes('--help')) {
     --force-write Always write the test cases to disk, even when no change was detected
     --no-fatals   Do not treat (test) assertion errors as fatals (dev tools only, rely on git etc for recovery)
     --concise     Do not dump AST and printer output to stdout. Parse and stop. Only works with -i or -f or -F
+    --expose-scope Add generated scope objects as \`.$scope\` property for nodes that generate a scope. Good luck that that that...
 `);
   process.exit();
 }
@@ -239,13 +241,13 @@ async function extractFiles(list) {
   if (!RUN_VERBOSE_IN_SERIAL) console.timeEnd('$$ Test file extraction time');
   console.log('Total input size:', bytes, 'bytes');
 }
-function coreTest(tob, tenko, testVariant, annexB, code = tob.inputCode) {
+function coreTest(tob, tenko, testVariant, annexB, enableCodeFrame = false, code = tob.inputCode, verbose = !!(INPUT_OVERRIDE || TARGET_FILE)) {
   wasHits = [];
   hitsToReport = wasHits;
   let r, e = '';
   let stdout = [];
   try {
-    if (INPUT_OVERRIDE || TARGET_FILE) {
+    if (verbose) {
       console.time('Pure Tenko parse time');
       console.log('Input size:', code.length, 'bytes');
     }
@@ -259,14 +261,20 @@ function coreTest(tob, tenko, testVariant, annexB, code = tob.inputCode) {
         targetEsVersion: FORCED_ES_TARGET || tob.inputOptions.es,
         babelCompat: BABEL_COMPAT,
         acornCompat: ACORN_COMPAT,
+        exposeScopes: EXPOSE_SCOPE,
 
-        $log: INPUT_OVERRIDE ? undefined : (...a) => stdout.push(a),
-        $warn: INPUT_OVERRIDE ? undefined : (...a) => stdout.push(a),
-        $error: INPUT_OVERRIDE ? undefined : (...a) => stdout.push(a),
+        astUids: tob.inputOptions.astUids || false,
+
+        errorCodeFrame: enableCodeFrame,
+        truncCodeFrame: true,
+
+        $log: verbose ? undefined : (...a) => stdout.push(a),
+        $warn: verbose ? undefined : (...a) => stdout.push(a),
+        $error: verbose ? undefined : (...a) => stdout.push(a),
       },
     );
     wasHits = []; // Prevent other parse calls from adding more HITS
-    if (INPUT_OVERRIDE || TARGET_FILE) {
+    if (verbose) {
       console.timeEnd('Pure Tenko parse time');
       if (CONCISE) return;
     }
@@ -285,7 +293,7 @@ function coreTest(tob, tenko, testVariant, annexB, code = tob.inputCode) {
         !INPUT_OVERRIDE && !TARGET_FILE && (AUTO_UPDATE && !CONFIRMED_UPDATE),
         REDUCING_PRINTER,
         !REDUCING_PRINTER || BABEL_COMPAT || ACORN_COMPAT,
-        INPUT_OVERRIDE || TARGET_FILE
+        verbose
       );
       if (tob.printerOutput[2] !== 'same' && tob.printerOutput[2] !== 'diff-same') {
         tob.continuePrint = 'Printer output needs attention [' + tob.printerOutput[2] + ']';
@@ -312,6 +320,8 @@ function coreTest(tob, tenko, testVariant, annexB, code = tob.inputCode) {
       });
       // Phase 2:
       function repeat(node, key, parent) {
+        if (key === '$scope') return; // Tenko can expose these optional, do not visit them here
+
         if (!Array.isArray(node)) {
           // node must be a plain object (because don't use anything else besides arrays)
           if (node.test_walked) {
@@ -338,7 +348,7 @@ function coreTest(tob, tenko, testVariant, annexB, code = tob.inputCode) {
       repeat(r.ast, 'root', {});
     }
   } catch (_e) {
-    if (INPUT_OVERRIDE || TARGET_FILE) {
+    if (verbose) {
       console.timeEnd('Pure Tenko parse time');
     }
     e = _e;
@@ -351,7 +361,7 @@ function coreTest(tob, tenko, testVariant, annexB, code = tob.inputCode) {
     if (!NO_FATALS && AUTO_UPDATE && tob.continuePrint && !CONFIRMED_UPDATE && !INPUT_OVERRIDE && !TARGET_FILE) {
       console.error(BOLD + 'Test Assertion fail' + RESET + ': testVariant=' + testVariant + ', annexB=' + annexB + ', test ' + BOLD + tob.file + RESET + ' was explicitly marked to pass, but it failed somehow;\n' + RED + tob.continuePrint + RESET);
       process.exit();
-    } else {
+    } else if (verbose) {
       console.error(tob.continuePrint);
     }
   }
@@ -539,9 +549,13 @@ async function runTest(list, tenko, testVariant/*: "sloppy" | "strict" | "module
   await Promise.all(list.map(async (tob/*: Tob */) => {
     let {inputCode, inputOptions} = tob;
     bytes += inputCode.length;
-    if (REDUCING) reduceAndExit(tob.inputCode, code => coreTest(tob, tenko, testVariant, annexB, code), tob.file);
+    if (REDUCING) {
+      // Note: we disable code frame generation because it leads to a very noisy error message that includes the input
+      // code and line numbers. The test case minifier relies purely on the output error staying the same.
+      reduceAndExit(tob.inputCode, code => coreTest(tob, tenko, testVariant, annexB, false, code, false).e || false, `./t --${testVariant} ${annexB ? '--annexb' : ''} ${Number.isFinite(FORCED_ES_TARGET || tob.inputOptions.es) ? FORCED_ES_TARGET || tob.inputOptions.es : ''}`, tob.file);
+    }
     // This is quite memory expensive but much easier to work with
-    tob.parserRawOutput[testVariant+annexB] = coreTest(tob, tenko, testVariant, annexB);
+    tob.parserRawOutput[testVariant+annexB] = coreTest(tob, tenko, testVariant, annexB, true);
     if (CONCISE) return;
     let rawOutput = tob.parserRawOutput[testVariant+annexB];
     if (SEARCH) {
@@ -1238,8 +1252,6 @@ if (INPUT_OVERRIDE) {
   getTestFiles(path.join(dirname, 'testcases'), '', files, true);
   if (!RUN_VERBOSE_IN_SERIAL) console.timeEnd('$$ Test search discovery time');
   console.log('Read all test files, gathered', files.length, 'files');
-
-  files = files.filter(f => f.indexOf('test262') >= 0 === TEST262);
 }
 
 if (AUTO_GENERATE || AUTO_GENERATE_CONSERVATIVE) {
