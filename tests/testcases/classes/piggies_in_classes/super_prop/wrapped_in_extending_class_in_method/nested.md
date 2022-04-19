@@ -114,6 +114,8 @@ ast: {
                                   callee: {
                                     type: 'MemberExpression',
                                     loc:{start:{line:1,column:53},end:{line:1,column:62},source:''},
+                                    computed: false,
+                                    optional: false,
                                     object: {
                                       type: 'Super',
                                       loc:{start:{line:1,column:53},end:{line:1,column:58},source:''}
@@ -122,8 +124,7 @@ ast: {
                                       type: 'Identifier',
                                       loc:{start:{line:1,column:59},end:{line:1,column:62},source:''},
                                       name: 'foo'
-                                    },
-                                    computed: false
+                                    }
                                   }
                                 }
                               }
@@ -187,7 +188,7 @@ _Output same as sloppy mode._
 Printer output different from input [sloppy][annexb:no]:
 
 ````js
-class outer extends (S) {meh(){class x{foo(x = new super.foo()){};}};}
+class outer extends (S) {meh(){class x{foo(x = new (super.foo)()){};}};}
 ````
 
 Produces same AST

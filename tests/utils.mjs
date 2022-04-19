@@ -168,7 +168,7 @@ function parseTestFile(tob) {
   let {file, oldData} = tob;
   if (!oldData) return;
 
-  ASSERT(oldData.includes(INPUT_HEADER), 'missing input header in ' + tob.file + ' (did you mean to use `./t F` instead of `./t f`?)');
+  ASSERT(oldData.includes(INPUT_HEADER), 'missing input header (new files should start with `@`) in ' + tob.file + ' (did you mean to use `./t F` instead of `./t f`?)');
   tob.aboveTheFold = oldData.slice(0, oldData.indexOf(INPUT_HEADER));
   tob.shouldPass = tob.aboveTheFold.toLowerCase().includes('\n## pass\n');
   tob.shouldFail = tob.aboveTheFold.toLowerCase().includes('\n## fail\n');
@@ -276,8 +276,9 @@ function parseTestFile(tob) {
       return obj;
     }, {});
 
-  const {es, astUids, ...unsupported} = tob.inputOptions
+  const {es, astUids, locationTracking, ranges, nodeRange, exposeScopes, ...unsupported} = tob.inputOptions
 
+  // If this triggers then the line above may need updating
   ASSERT(JSON.stringify(unsupported) === '{}', 'options have hardcoded support in the test suite so if a new option needs support, make sure to connect it first, then update this assert. Unhandled options: ' + JSON.stringify(unsupported) + ', file: ' + tob.fileShort);
 }
 

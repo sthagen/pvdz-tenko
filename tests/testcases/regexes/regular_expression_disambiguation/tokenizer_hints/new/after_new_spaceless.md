@@ -41,6 +41,8 @@ ast: {
         callee: {
           type: 'MemberExpression',
           loc:{start:{line:1,column:3},end:{line:1,column:17},source:''},
+          computed: false,
+          optional: false,
           object: {
             type: 'Literal',
             loc:{start:{line:1,column:3},end:{line:1,column:9},source:''},
@@ -52,8 +54,7 @@ ast: {
             type: 'Identifier',
             loc:{start:{line:1,column:10},end:{line:1,column:17},source:''},
             name: 'expando'
-          },
-          computed: false
+          }
         }
       }
     }
@@ -94,7 +95,7 @@ _Output same as sloppy mode._
 Printer output different from input [sloppy][annexb:no]:
 
 ````js
-new /foo/g.expando();
+new (/foo/g.expando)();
 ````
 
 Produces same AST

@@ -55,6 +55,8 @@ ast: {
         callee: {
           type: 'MemberExpression',
           loc:{start:{line:1,column:4},end:{line:1,column:14},source:''},
+          computed: true,
+          optional: false,
           object: {
             type: 'Identifier',
             loc:{start:{line:1,column:4},end:{line:1,column:7},source:''},
@@ -65,8 +67,7 @@ ast: {
             loc:{start:{line:1,column:8},end:{line:1,column:13},source:''},
             value: 'bar',
             raw: '"bar"'
-          },
-          computed: true
+          }
         }
       }
     }
@@ -108,7 +109,7 @@ _Output same as sloppy mode._
 Printer output different from input [sloppy][annexb:no]:
 
 ````js
-new Foo["bar"](X, Y, Z);
+new (Foo["bar"])(X, Y, Z);
 ````
 
 Produces same AST

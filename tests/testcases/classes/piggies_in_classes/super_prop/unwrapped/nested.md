@@ -75,6 +75,8 @@ ast: {
                     callee: {
                       type: 'MemberExpression',
                       loc:{start:{line:1,column:21},end:{line:1,column:30},source:''},
+                      computed: false,
+                      optional: false,
                       object: {
                         type: 'Super',
                         loc:{start:{line:1,column:21},end:{line:1,column:26},source:''}
@@ -83,8 +85,7 @@ ast: {
                         type: 'Identifier',
                         loc:{start:{line:1,column:27},end:{line:1,column:30},source:''},
                         name: 'foo'
-                      },
-                      computed: false
+                      }
                     }
                   }
                 }
@@ -139,7 +140,7 @@ _Output same as sloppy mode._
 Printer output different from input [sloppy][annexb:no]:
 
 ````js
-class x{foo(x = new super.foo()){};}
+class x{foo(x = new (super.foo)()){};}
 ````
 
 Produces same AST

@@ -1,11 +1,11 @@
 # Tenko
 
-A "pixel perfect" 100% spec compliant JavaScript parser written in JavaScript, parsing ES6-ES11.
+A "pixel perfect" 100% spec compliant JavaScript parser written in JavaScript, parsing ES6/ES2015 - ES2021.
 
 REPL: https://pvdz.github.io/tenko/repl
 
 - Supports:
-  - Anything stage 4 up to ES11 / ES2020
+  - Anything stage 4 up to ES2021
   - Regex syntax (deep)
   - Parsing modes:
     - Sloppy / non-strict
@@ -72,8 +72,8 @@ const {
     getLexer = null, // getLexer(lexer)
     // You use this to parse `eval` code
     allowGlobalReturn = false,
-    // Target a very specific ecmascript version (like, reject async)
-    targetEsVersion = lastVersion, // (currently es11)
+    // Target a very specific ecmascript version (like, reject async). Number; 6 - 12, or 2015 - 2021, or Infinity.
+    targetEsVersion = lastVersion, // (Last supported version is currently ES2021)
     // Leave built up scope information in the ASTs (good luck)
     exposeScopes = false,
     // Assign each node a unique incremental id
@@ -88,6 +88,12 @@ const {
     $error = console.error,
     // Value ot use for the `source` field of each `loc` object
     sourceField = '',
+    // Generate a `range: {start: number, end: number}` property on all loc objects (does not require `locationTracking`)
+    ranges = false,
+    // Generate a `range: [start: number, end: number]` property on all nodes. `input.slice(range[0], range[1])` should get you the text for a node.
+    nodeRange = false,
+    // Do not populate loc properties on AST nodes (property will be undefined). Since v<unpublished>
+    locationTracking = true,
   }
 );
 ```
@@ -206,6 +212,14 @@ There are many flags. Some are specific to an action, others are generic. Some e
 9                    Run as close to the rules as of ES9  / ES2018 as possible
 10                   Run as close to the rules as of ES10 / ES2019 as possible
 11                   Run as close to the rules as of ES11 / ES2020 as possible
+12                   Run as close to the rules as of ES11 / ES2021 as possible
+2015
+2016
+2017
+2018
+2019
+2020
+2021
 
 --min                Given a broken input, brute force minify the input while maintaining the same error message
 --acorn              Output a Acorn compatible AST

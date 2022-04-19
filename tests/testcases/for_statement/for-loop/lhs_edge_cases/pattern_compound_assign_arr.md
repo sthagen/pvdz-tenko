@@ -30,7 +30,7 @@ Parsed with script goal and as if the code did not start with strict mode header
 
 `````
 throws: Parser error!
-  Cannot compound assign to an object or array pattern
+  Can not compound assign to a pattern
 
 start@1:0, error@1:6
 ╔══╦════════════════

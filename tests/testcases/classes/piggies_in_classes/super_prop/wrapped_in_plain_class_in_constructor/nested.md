@@ -110,6 +110,8 @@ ast: {
                                   callee: {
                                     type: 'MemberExpression',
                                     loc:{start:{line:1,column:51},end:{line:1,column:60},source:''},
+                                    computed: false,
+                                    optional: false,
                                     object: {
                                       type: 'Super',
                                       loc:{start:{line:1,column:51},end:{line:1,column:56},source:''}
@@ -118,8 +120,7 @@ ast: {
                                       type: 'Identifier',
                                       loc:{start:{line:1,column:57},end:{line:1,column:60},source:''},
                                       name: 'foo'
-                                    },
-                                    computed: false
+                                    }
                                   }
                                 }
                               }
@@ -183,7 +184,7 @@ _Output same as sloppy mode._
 Printer output different from input [sloppy][annexb:no]:
 
 ````js
-class outer{constructor(){class x{foo(x = new super.foo()){};}};}
+class outer{constructor(){class x{foo(x = new (super.foo)()){};}};}
 ````
 
 Produces same AST
