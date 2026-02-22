@@ -110,17 +110,25 @@ This is only necessary for safe transport and because markdown does not have an 
 
 A test case can have options. These will follow the `## Input` header as a dashed list and, if there's more content, this is the only content that is a dashed list.
 
-TNote that the list of supported options is hardcoded in the test runner (it will warn you for unhandled options).
+Note that the list of supported options is hardcoded in the test runner (it will warn you for unhandled options).
 
 The format of each option is as follows:
 
-`````
+````````
+## Input
+
 - `key = value`
 - `es = 7`
 - `astUid = true`
+
+`````js
+(...a = x,) => {}
 `````
+````````
 
 The options are specific to the testing framework, although I could see myself adding a more free form way of passing options down to the parser, later. The current style is still a little legacy from the old infra.
+
+The `es` option sets the target ECMAScript version for that test (e.g. `es = 10` for ES2019). Allowed values are 6–14 or 2015–2023. When running with `./t f <file>`, the CLI flag `--es14` (or a number like `14`) overrides the file’s `es` value.
 
 ### Example
 

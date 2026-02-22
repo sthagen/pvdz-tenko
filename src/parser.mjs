@@ -118,6 +118,7 @@ import {
   LF_CAN_NEW_DOT_TARGET,
   LF_FOR_REGEX,
   LF_IN_ASYNC,
+  LF_IN_CLASS_BODY,
   LF_IN_CONSTRUCTOR,
   LF_IN_FOR_LHS,
   LF_IN_FUNC_ARGS,
@@ -183,6 +184,7 @@ import {
   $COMMENT_SINGLE,
   $COMMENT_MULTI,
   $COMMENT_HTML,
+  $COMMENT_HASHBANG,
   $IDENT,
   $ID_arguments,
   $ID_as,
@@ -239,6 +241,7 @@ import {
   $ID_while,
   $ID_with,
   $ID_yield,
+  $ID_PRIVATE_IDENT,
   $NUMBER_HEX,
   $NUMBER_DEC,
   $NUMBER_BIN,
@@ -309,6 +312,7 @@ import {
   $PUNC_TILDE,
   $REGEXN,
   $REGEXU,
+  $REGEXV,
   $STRING_SINGLE,
   $STRING_DOUBLE,
   $TICK_HEAD,
@@ -379,6 +383,8 @@ import {
   VERSION_OPTIONAL_CATCH,
   VERSION_DYNAMIC_IMPORT,
   VERSION_EXPORT_STAR_AS,
+  VERSION_IMPORT_META,
+  VERSION_TOPLEVEL_AWAIT,
   VERSION_WHATEVER,
   IS_ASYNC,
   NOT_ASYNC,
@@ -540,12 +546,14 @@ function Parser(code, options = {}) {
     tokenStorage: options_tokenStorage,
     getLexer = null,
     allowGlobalReturn = false, // you may need this to parse arbitrary code or eval code for example
-    targetEsVersion = VERSION_WHATEVER, // 6, 7, 8, 9, 10, 11, 12, 2015, 2016, 2017, 2018, 2019, 2020, 2021, Infinity
+    targetEsVersion = VERSION_WHATEVER, // 6, 7, 8, 9, 10, 11, 12, 13, 14, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, Infinity
     exposeScopes: options_exposeScopes = false, // put scopes in the AST under `$scope` property?
     astUids = false, // add an incremental uid to all ast nodes for debugging
     ranges: options_ranges = false, // Add `range` to each `loc` object for absolute start/stop index on input?
     nodeRange: options_nodeRange = false, // Add a `range` to each node itself, being an array. `input.slice(range[0], range[1])` should get you the text of the node.
     locationTracking: options_locationTracking = true, // Add the `loc` property to all entries? (Much faster without...)
+    toplevelAwait: options_toplevelAwait = undefined, // undefined = allow in Module when target ES2022+; true = force on; false = force off
+    allowDuplicateLabel: options_allowDuplicateLabel = false, // Allow labels to occur more than once in the same statement-tree? Syntactically invalid but this flag prevents the error being thrown.
 
     templateNewlineNormalization = true, // normalize \r and \rn to \n in the `.raw` of template nodes? Estree spec says yes, but makes it hard to serialize lossless
 
@@ -564,6 +572,8 @@ function Parser(code, options = {}) {
     babelTokenCompat = false, // Add locs to tokens
     acornCompat = false,
 
+    alwaysAllowOctalEscapes = false, // Prevent syntax error for octal escapes regardless of strict mode or anything else
+
     // Should we parse directives as their own AST nodes? (Other parsers do not, they just use ExpressionStatement)
     // I'm super confused since I read https://github.com/estree/estree/pull/99 as that directives get their own node
     // and in https://github.com/estree/estree/issues/6 many authors indicate to have adopted this PR, yet none of the
@@ -571,8 +581,8 @@ function Parser(code, options = {}) {
     /* (This comment prevents the buildscript from detecting the ast prefix) */AST_directiveNodes = false,
   } = options;
 
-  if (targetEsVersion >= 2015 && targetEsVersion <= 2021) {
-    targetEsVersion -= 2009; // es6 = 2015, etc. 2015-2009=6
+  if (targetEsVersion >= 2015 && targetEsVersion <= 2023) {
+    targetEsVersion -= 2009; // es6 = 2015, etc. 2015-2009=6, 2023-2009=14
   }
 
   let goalMode = GOAL_SCRIPT;
@@ -607,6 +617,8 @@ function Parser(code, options = {}) {
     gracefulErrors: FAIL_HARD,
     tokenStorageExternal: options_tokenStorage,
     babelTokenCompat,
+
+    alwaysAllowOctalEscapes,
 
     errorCodeFrame,
     truncCodeFrame,
@@ -665,9 +677,17 @@ function Parser(code, options = {}) {
   let allowOptionalCatchBinding = targetEsVersion >= VERSION_OPTIONAL_CATCH || targetEsVersion === VERSION_WHATEVER;
   let allowDynamicImport = (targetEsVersion >= VERSION_DYNAMIC_IMPORT || targetEsVersion === VERSION_WHATEVER);
   let allowExportStarAs = (targetEsVersion >= VERSION_EXPORT_STAR_AS || targetEsVersion === VERSION_WHATEVER);
+  let allowImportMeta = (targetEsVersion >= VERSION_IMPORT_META || targetEsVersion === VERSION_WHATEVER);
+  let allowToplevelAwaitByVersion = (targetEsVersion >= VERSION_TOPLEVEL_AWAIT || targetEsVersion === VERSION_WHATEVER);
+  // Explicit override: true = allow, false = disallow, undefined = use version (allow when ES2022+)
+  let allowToplevelAwait = options_toplevelAwait === true || (options_toplevelAwait !== false && options_toplevelAwait !== true && allowToplevelAwaitByVersion);
+
+  let allowClassStaticBlock = (targetEsVersion >= VERSION_TOPLEVEL_AWAIT || targetEsVersion === VERSION_WHATEVER); // ES2022
+  let allowPublicClassFields = (targetEsVersion >= VERSION_TOPLEVEL_AWAIT || targetEsVersion === VERSION_WHATEVER); // ES2022 public class field initializers (a = b; a;)
+  let allowPrivateClassFields = (targetEsVersion >= VERSION_TOPLEVEL_AWAIT || targetEsVersion === VERSION_WHATEVER); // ES2022 private fields/methods (#x, this.#x, #x in obj)
 
   ASSERT(goalMode === GOAL_SCRIPT || goalMode === GOAL_MODULE);
-  ASSERT((targetEsVersion >= 6 && targetEsVersion <= 12) || targetEsVersion === VERSION_WHATEVER, 'version should be 6 7 8 9 10 12 2015 2016 2017 2018 2019 2020 2021 or Infinity');
+  ASSERT((targetEsVersion >= 6 && targetEsVersion <= 15) || targetEsVersion === VERSION_WHATEVER, 'version should be 6 7 8 9 10 11 12 13 14 15 2015 2016 2017 2018 2019 2020 2021 2022 2023 2024 or Infinity');
 
   if (getLexer) getLexer(tok);
 
@@ -948,6 +968,18 @@ function Parser(code, options = {}) {
     ASSERT(!options_locationTracking || (identNode.loc.end.column - identNode.loc.start.column === ($tp_ident_stop - $tp_ident_start)), 'for idents the location should only span exactly the length of the ident and cannot hold newlines');
 
     return identNode;
+  }
+  function AST_getPrivateIdentNode($tp_start, $tp_stop, $tp_line, $tp_column, $tp_canon) {
+    ASSERT(AST_getPrivateIdentNode.length === arguments.length, 'arg count');
+    let len = $tp_stop - $tp_start;
+    let colEnd = $tp_column + len;
+    let node = {
+      type: 'PrivateIdentifier',
+      name: $tp_canon,
+      loc: AST_getCloseLoc($tp_start, $tp_line, $tp_column, $tp_stop, $tp_line, colEnd),
+    };
+    if (options_nodeRange) node.range = [$tp_start, $tp_stop];
+    return node;
   }
   function AST_setLiteral(astProp, $tp_lit_type, $tp_lit_start, $tp_lit_stop, $tp_lit_line, $tp_lit_column, $tp_lit_canon) {
     _AST_setLiteral(astProp, $tp_lit_type, $tp_lit_start, $tp_lit_stop, $tp_lit_line, $tp_lit_column, $tp_lit_canon, false);
@@ -1383,6 +1415,9 @@ function Parser(code, options = {}) {
     if ($tp_comment_type === $COMMENT_SINGLE) {
       // typeName = 'CommentBlock'
       value = tok_sliceInput($tp_comment_start + 2, $tp_comment_stop);
+    } else if ($tp_comment_type === $COMMENT_HASHBANG) {
+      value = tok_sliceInput($tp_comment_start + 2, $tp_comment_stop);
+      if (babelCompat && _tree.type === 'Program' && $tp_comment_start === 0) _tree.interpreter = value;
     } else if ($tp_comment_type === $COMMENT_MULTI) {
       typeName = 'CommentBlock'
       value = tok_sliceInput($tp_comment_start + 2, $tp_comment_stop - 2);
@@ -3289,6 +3324,7 @@ function Parser(code, options = {}) {
       | LF_IN_TEMPLATE // TODO: handle this differently and add tests why. Only relevant for the token _after_ the func/arrow
       | LF_SUPER_PROP
       | LF_SUPER_CALL
+      | LF_IN_CLASS_BODY // nested functions/arrows can still use #x in obj if inside a class
     );
 
     // the function name can inherit this state from the enclosing scope but all other parts of a function will
@@ -3911,11 +3947,11 @@ function Parser(code, options = {}) {
     ASSERT($tp_await_start !== tok_getStart(), 'await should have been skipped');
     ASSERT_ASSIGN_EXPR(allowAssignment);
 
-    // in module: only if lexerFlags allow await (inside async code)
+    // in module: only if lexerFlags allow await (inside async code) or top-level await (ES2022+)
     // in script: must be considered an await-expression when inside async, must be considered a var name otherwise
-    // (`await` when not a keyword _is_ assignable)
+    // (`await` when not a keyword _is_ assignable). Top-level await is only valid in Module, not Script.
 
-    if (hasAnyFlag(lexerFlags, LF_IN_ASYNC)) {
+    if (hasAnyFlag(lexerFlags, LF_IN_ASYNC) || (allowToplevelAwait && goalMode === GOAL_MODULE && hasAnyFlag(lexerFlags, LF_IN_GLOBAL))) {
       return parseAwaitKeyword(lexerFlags, $tp_await_start, $tp_await_stop, $tp_await_line, $tp_await_column, isNewArg, astProp);
     }
 
@@ -4060,6 +4096,27 @@ function Parser(code, options = {}) {
     }
   }
 
+  function parseStaticBlock(lexerFlags, astProp, enclosingScoop) {
+    ASSERT(parseStaticBlock.length === arguments.length, 'arg count');
+    ASSERT(tok_getType() === $PUNC_CURLY_OPEN, 'static block must start with {');
+    let lexerFlagsNoTemplate = sansFlag(lexerFlags, LF_IN_TEMPLATE | LF_NO_ASI);
+    let $tp_curly_start = tok_getStart();
+    let $tp_curly_line = tok_getLine();
+    let $tp_curly_column = tok_getColumn();
+    ASSERT_skipToStatementStart($PUNC_CURLY_OPEN, lexerFlagsNoTemplate);
+    let scoop = (enclosingScoop != null && enclosingScoop !== DO_NOT_BIND && enclosingScoop.isScope)
+      ? SCOPE_addLayer(enclosingScoop, SCOPE_LAYER_BLOCK, 'StaticBlock')
+      : (SCOPE_addLayer(SCOPE_createGlobal('StaticBlock'), SCOPE_LAYER_BLOCK, 'StaticBlock'));
+    AST_open(astProp, { type: 'StaticBlock', loc: undefined, body: [] });
+    if (options_exposeScopes) AST_set('$scope', scoop);
+    while (tok_getType() !== $PUNC_CURLY_CLOSE) {
+      parseNestedBodyPart(lexerFlagsNoTemplate, scoop, EMPTY_LABEL_SET, NOT_LABELLED, FDS_LEX, PARENT_NOT_LABEL, 'body');
+    }
+    ASSERT_skipToStatementStart($PUNC_CURLY_CLOSE, lexerFlags);
+    AST_close($tp_curly_start, $tp_curly_line, $tp_curly_column, 'StaticBlock');
+    return CANT_DESTRUCT;
+  }
+
   function parseBreakStatement(lexerFlags, labelSet, astProp) {
     ASSERT(arguments.length === parseBreakStatement.length, 'arg count');
     ASSERT_LABELSET(labelSet);
@@ -4081,6 +4138,9 @@ function Parser(code, options = {}) {
 
     // Note: must check eof/semi as well otherwise the value would be mandatory and parser would throw
     if (isIdentToken($tp_afterBreak_type) && tok_getNlwas() === false) {
+      if ($tp_afterBreak_type === $ID_PRIVATE_IDENT) {
+        return THROW_RANGE('Private identifiers cannot be used as labels', tok_getStart(), tok_getStop());
+      }
 
       let $tp_label_line = tok_getLine();
       let $tp_label_column = tok_getColumn();
@@ -4237,6 +4297,9 @@ function Parser(code, options = {}) {
 
     // note: must check eof/semi as well otherwise the value would be mandatory and parser would throw
     if (isIdentToken(tok_getType()) && tok_getNlwas() === false) {
+      if (tok_getType() === $ID_PRIVATE_IDENT) {
+        return THROW_RANGE('Private identifiers cannot be used as labels', tok_getStart(), tok_getStop());
+      }
 
       let $tp_label_line = tok_getLine();
       let $tp_label_column = tok_getColumn();
@@ -4849,6 +4912,7 @@ function Parser(code, options = {}) {
 
     // Start with left of the (optional) `as`
 
+    let $tp_name_type = tok_getType();
     let $tp_name_line = tok_getLine();
     let $tp_name_column = tok_getColumn();
     let $tp_name_start = tok_getStart();
@@ -4857,6 +4921,7 @@ function Parser(code, options = {}) {
 
     // Exported name is either the right of the `as`, if present at all, and otherwise same as name
 
+    let $tp_exportedName_type = $tp_name_type;
     let $tp_exportedName_line = tok_getLine();
     let $tp_exportedName_column = tok_getColumn();
     let $tp_exportedName_start = tok_getStart();
@@ -4872,6 +4937,7 @@ function Parser(code, options = {}) {
       ASSERT_skipToIdentOrDie($ID_as, lexerFlags);
       // note: the exported _name_ can be any identifier, keywords included
 
+      $tp_exportedName_type = tok_getType();
       $tp_exportedName_line = tok_getLine();
       $tp_exportedName_column = tok_getColumn();
       $tp_exportedName_start = tok_getStart();
@@ -4879,6 +4945,13 @@ function Parser(code, options = {}) {
       $tp_exportedName_canon = tok_getCanoN();
 
       ASSERT_skipAny($G_IDENT, lexerFlags);
+    }
+
+    if ($tp_name_type === $ID_PRIVATE_IDENT) {
+      return THROW_RANGE('Private identifiers are not allowed in export specifiers', $tp_name_start, $tp_name_stop);
+    }
+    if ($tp_exportedName_type === $ID_PRIVATE_IDENT) {
+      return THROW_RANGE('Private identifiers are not allowed in export specifiers', $tp_exportedName_start, $tp_exportedName_stop);
     }
 
     addNameToExports(tmpExportedNames, $tp_exportedName_start, $tp_exportedName_stop, $tp_exportedName_canon);
@@ -5666,11 +5739,16 @@ function Parser(code, options = {}) {
     let $tp_import_start = tok_getStart();
     let $tp_import_stop = tok_getStop();
 
-    ASSERT_skipToIdentStarCurlyOpenParenOpenString($ID_import, lexerFlags);
+    skipAny(lexerFlags); // consume `import`, now at the next token
     if (tok_getType() === $PUNC_PAREN_OPEN) {
       // This must be dynamic `import()` or an error
       return parseDynamicImportStatement(lexerFlags, $tp_import_start, $tp_import_stop, $tp_import_line, $tp_import_column, astProp);
     }
+    if (tok_getType() === $PUNC_DOT) {
+      // `import.meta` — only at top level in module we reach this path
+      return parseImportMetaStatement(lexerFlags, $tp_import_start, $tp_import_stop, $tp_import_line, $tp_import_column, astProp);
+    }
+    ASSERT_VALID(isIdentToken(tok_getType()) || tok_getType() === $PUNC_STAR || tok_getType() === $PUNC_CURLY_OPEN || isStringToken(tok_getType()), 'import declaration: wanted ident * { or string');
 
     // Note: since `import()` is valid in non-global, and in non-module-goal, we have to check the token after `import` first
 
@@ -6459,7 +6537,7 @@ function Parser(code, options = {}) {
 
     let set = labelSet;
     while (set) {
-      if (set.statementLabels.has($tp_ident_canon)) {
+      if (set.statementLabels.has($tp_ident_canon) && !options_allowDuplicateLabel) {
         return THROW_RANGE('Saw the same label twice which is not allowed', $tp_ident_start, $tp_ident_stop);
       }
       set = set.parentLabels;
@@ -6882,6 +6960,10 @@ function Parser(code, options = {}) {
     ASSERT(nonFatalBindingIdentCheck.length === arguments.length, 'expecting all args');
     ASSERT(isIdentToken($tp_ident_type), 'ident check on ident tokens ok');
     ASSERT_BINDING_TYPE(bindingType);
+
+    if ($tp_ident_type === $ID_PRIVATE_IDENT) {
+      return 'Private identifiers are only valid in class bodies and in expressions (e.g. this.#x, #x in obj), not as bindings';
+    }
 
     // TODO: this check can be drastically improved.
 
@@ -7919,6 +8001,9 @@ function Parser(code, options = {}) {
         if (tok_getType() === $PUNC_PAREN_OPEN) {
           return parseDynamicImport(lexerFlags, $tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, astProp);
         }
+        if (tok_getType() === $PUNC_DOT) {
+          return parseImportMeta(lexerFlags, $tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon, astProp);
+        }
         return THROW_RANGE('Import keyword only allowed on toplevel or in a dynamic import', $tp_ident_start, $tp_ident_stop);
       case $ID_let:
         ASSERT(bindingType !== BINDING_TYPE_CLASS, 'class ident does not pass through here');
@@ -7978,6 +8063,23 @@ function Parser(code, options = {}) {
         // - `function *f(){ new yield }`
         // - `x = x + yield`
         return parseYield(lexerFlags, $tp_ident_type, $tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon, allowAssignment, astProp);
+      case $ID_PRIVATE_IDENT:
+        // Only valid as left of `in`: `#x in obj` (ES2022), and only within the class body that defines #x
+        if (!allowPrivateClassFields) {
+          return THROW_RANGE('Private identifier (as in `#x in obj`) is not supported in the currently targeted language version', $tp_ident_start, $tp_ident_stop);
+        }
+        if (bindingType !== BINDING_TYPE_NONE) {
+          return THROW_RANGE('Private identifier is only valid as the left-hand side of an `in` expression', $tp_ident_start, $tp_ident_stop);
+        }
+        // Standalone #x is only valid when immediately followed by `in` (e.g. #x in obj)
+        if (tok_getType() !== $ID_in) {
+          return THROW_RANGE('Private identifier is only valid as the left-hand side of an `in` expression', $tp_ident_start, $tp_ident_stop);
+        }
+        if (hasNoFlag(lexerFlags, LF_IN_CLASS_BODY)) {
+          return THROW_RANGE('Private field check (`#x in obj`) is only valid within the class body that defines the private field', $tp_ident_start, $tp_ident_stop);
+        }
+        AST_setNode(astProp, AST_getPrivateIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon));
+        return NOT_ASSIGNABLE;
     }
 
     // - `x` but not `true`
@@ -8142,6 +8244,32 @@ function Parser(code, options = {}) {
     if (tok_getType() === $PUNC_DOT) return parseNewDotTarget(lexerFlags, $tp_new_start, $tp_new_stop, $tp_new_line, $tp_new_column, $tp_new_canon, astProp);
     return parseNewExpression(lexerFlags, $tp_new_start, $tp_new_line, $tp_new_column, astProp);
   }
+  function parseImportMeta(lexerFlags, $tp_import_start, $tp_import_stop, $tp_import_line, $tp_import_column, $tp_import_canon, astProp) {
+    // `import.meta` — only valid in Module goal, ES2020+
+    if (goalMode !== GOAL_MODULE) {
+      return THROW_RANGE('`import.meta` is only valid in module goal', $tp_import_start, $tp_import_stop);
+    }
+    if (!allowImportMeta) {
+      return THROW_RANGE('`import.meta` requires ES2020+ / ES11+.', $tp_import_start, $tp_import_stop);
+    }
+    skipDiv(lexerFlags); // consume the dot
+    if (!isIdentToken(tok_getType()) || tok_getCanoN() !== 'meta') {
+      return THROW_RANGE('`import.meta` expects the identifier `meta` after the dot', tok_getStart(), tok_getStop());
+    }
+    let $tp_property_line = tok_getLine();
+    let $tp_property_column = tok_getColumn();
+    let $tp_property_start = tok_getStart();
+    let $tp_property_stop = tok_getStop();
+    let $tp_property_canon = tok_getCanoN();
+    skipDiv(lexerFlags); // consume "meta"
+    AST_setClosedNode($tp_import_start, astProp, {
+      type: 'MetaProperty',
+      loc: AST_getClosedLoc($tp_import_start, $tp_import_line, $tp_import_column),
+      meta: AST_getIdentNode($tp_import_start, $tp_import_stop, $tp_import_line, $tp_import_column, $tp_import_canon),
+      property: AST_getIdentNode($tp_property_start, $tp_property_stop, $tp_property_line, $tp_property_column, $tp_property_canon),
+    });
+    return NOT_ASSIGNABLE;
+  }
   function parseNewDotTarget(lexerFlags, $tp_new_start, $tp_new_stop, $tp_new_line, $tp_new_column, $tp_new_canon, astProp) {
     // - `new.target`
     // - `new.foo`
@@ -8210,12 +8338,13 @@ function Parser(code, options = {}) {
     // - `new await x()()`
     // - `new b↵++c;`
 
-    if (isIdentToken(tok_getType()) && tok_getType() === $ID_import) {
-      return THROW_RANGE('Cannot use dynamic import as an argument to `new`, the spec simply does not allow it', $tp_new_start, tok_getStop());
-    }
-
+    // Note: `new import.meta` is valid; only `new import(...)` (dynamic import) is invalid
     // Note: the `isNewArg` state will make sure the `parseValueTail` function properly deals with the first call arg
     let assignableForPiggies = parseValue(lexerFlags, ASSIGN_EXPR_IS_ERROR, IS_NEW_ARG, NOT_LHSE, 'callee');
+    let calleeNode = _path[_path.length - 1].callee;
+    if (calleeNode && (calleeNode.type === 'ImportExpression' || (calleeNode.type === 'CallExpression' && calleeNode.callee && calleeNode.callee.type === 'Import'))) {
+      return THROW_RANGE('Cannot use dynamic import as an argument to `new`, the spec simply does not allow it', $tp_new_start, tok_getStop());
+    }
     AST_close($tp_new_start, $tp_new_line, $tp_new_column, 'NewExpression');
     // [x]: `async function f(){ (x = new x(await x)) => {} }`
     return setNotAssignable(assignableForPiggies);
@@ -8769,7 +8898,7 @@ function Parser(code, options = {}) {
     }
 
     if (isIdentToken($tp_qdotTail_type)) {
-      // x?.y
+      // x?.y  or  x?.#private (ES2022)
       // This is the same logic as parsing an ident property tail, except it already consumed the dot and it's never assignable
 
       let $tp_ident_line = tok_getLine();
@@ -8778,14 +8907,25 @@ function Parser(code, options = {}) {
       let $tp_ident_stop = tok_getStop();
       let $tp_ident_canon = tok_getCanoN();
 
+      if ($tp_qdotTail_type === $ID_PRIVATE_IDENT && !allowPrivateClassFields) {
+        return THROW_RANGE('Private class fields are not supported in the currently targeted language version', $tp_ident_start, $tp_ident_stop);
+      }
+      let propertyNode = $tp_qdotTail_type === $ID_PRIVATE_IDENT
+        ? AST_getPrivateIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon)
+        : AST_getIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon);
+
+      let objectNode = AST_popNode(astProp);
+      if ($tp_qdotTail_type === $ID_PRIVATE_IDENT && objectNode && objectNode.type === 'Super') {
+        return THROW_RANGE('Private fields are not accessible via super', $tp_ident_start, $tp_ident_stop);
+      }
       ASSERT_skipDiv($G_IDENT, lexerFlags); // x.y / z is division
       AST_setClosedNode($tp_valueFirst_start, astProp, {
         type: 'MemberExpression',
         loc: AST_getClosedLoc($tp_valueFirst_start, $tp_valueFirst_line,  $tp_valueFirst_column),
         computed: false,
         optional: true, // For optional chaining.
-        object: AST_popNode(astProp),
-        property: AST_getIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon),
+        object: objectNode,
+        property: propertyNode,
       });
       const nextAssignable = parseValueTail(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, setNotAssignable(assignable), NOT_NEW_ARG, NOT_LHSE, astProp);
       if (injecting) AST_close($tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, 'ChainExpression');
@@ -8810,24 +8950,36 @@ function Parser(code, options = {}) {
     return THROW_RANGE('Unexpected input after `?.`; expecting an identifier (property), opening square bracket (computed property), or opening parenthesis (call)', tok_getStart(), tok_getStop());
   }
   function _parseValueTailDotProperty(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, assignable, isNewArg, isOptional, astProp) {
-    // parseMemberExpression dot
+    // parseMemberExpression dot (including this.#private)
 
     ASSERT_skipToIdentOrDie('.', lexerFlags | LF_NOT_KEYWORD);
 
+    let $tp_ident_type = tok_getType();
     let $tp_ident_line = tok_getLine();
     let $tp_ident_column = tok_getColumn();
     let $tp_ident_start = tok_getStart();
     let $tp_ident_stop = tok_getStop();
     let $tp_ident_canon = tok_getCanoN();
 
+    if ($tp_ident_type === $ID_PRIVATE_IDENT && !allowPrivateClassFields) {
+      return THROW_RANGE('Private class fields are not supported in the currently targeted language version', $tp_ident_start, $tp_ident_stop);
+    }
+
     ASSERT_skipDiv($G_IDENT, lexerFlags); // x.y / z is division
+    let propertyNode = $tp_ident_type === $ID_PRIVATE_IDENT
+      ? AST_getPrivateIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon)
+      : AST_getIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon);
+    let objectNode = AST_popNode(astProp);
+    if ($tp_ident_type === $ID_PRIVATE_IDENT && objectNode && objectNode.type === 'Super') {
+      return THROW_RANGE('Private fields are not accessible via super', $tp_ident_start, $tp_ident_stop);
+    }
     AST_setClosedNode($tp_valueFirst_start, astProp, {
       type: 'MemberExpression',
       loc: AST_getClosedLoc($tp_valueFirst_start, $tp_valueFirst_line,  $tp_valueFirst_column),
       computed: false,
       optional: false, // For optional chaining.
-      object: AST_popNode(astProp),
-      property: AST_getIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon),
+      object: objectNode,
+      property: propertyNode,
     });
     return parseValueTail(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, setAssignable(assignable), isNewArg, NOT_LHSE, astProp);
   }
@@ -9073,6 +9225,20 @@ function Parser(code, options = {}) {
     parseSemiOrAsi(lexerFlags);
     AST_close($tp_import_start, $tp_import_line, $tp_import_column, 'ExpressionStatement');
   }
+  function parseImportMetaStatement(lexerFlags, $tp_import_start, $tp_import_stop, $tp_import_line, $tp_import_column, astProp) {
+    ASSERT(parseImportMetaStatement.length === arguments.length, 'arg count');
+
+    AST_open(astProp, {
+      type: 'ExpressionStatement',
+      loc: undefined,
+      expression: undefined,
+    });
+    parseImportMeta(lexerFlags, $tp_import_start, $tp_import_stop, $tp_import_line, $tp_import_column, 'import', 'expression');
+    let assignable = parseValueTail(lexerFlags, $tp_import_start, $tp_import_line, $tp_import_column, NOT_ASSIGNABLE, NOT_NEW_ARG, NOT_LHSE, 'expression');
+    parseExpressionFromOp(lexerFlags, $tp_import_start, $tp_import_stop, $tp_import_line, $tp_import_column, assignable, 'expression');
+    parseSemiOrAsi(lexerFlags);
+    AST_close($tp_import_start, $tp_import_line, $tp_import_column, 'ExpressionStatement');
+  }
   function parseDynamicImport(lexerFlags, $tp_import_start, $tp_import_stop, $tp_import_line, $tp_import_column, astProp) {
     ASSERT(parseDynamicImport.length === arguments.length, 'arg count');
     ASSERT(tok_getType() === $PUNC_PAREN_OPEN, 'havent consumed the paren yet');
@@ -9168,7 +9334,7 @@ function Parser(code, options = {}) {
     }
 
     let insideForLhs = hasAllFlags(lexerFlags, LF_IN_FOR_LHS);
-    let arrowInheritedFlags = lexerFlags & (LF_CAN_NEW_DOT_TARGET | LF_IN_CONSTRUCTOR);
+    let arrowInheritedFlags = lexerFlags & (LF_CAN_NEW_DOT_TARGET | LF_IN_CONSTRUCTOR | LF_IN_CLASS_BODY);
 
     lexerFlags = resetLexerFlagsForFuncAndArrow(lexerFlags, $UNTYPED, $tp_async_type, IS_ARROW);
     lexerFlags |= arrowInheritedFlags; // Some flags _are_ inherited by arrows (tests will show you the way)
@@ -11060,6 +11226,13 @@ function Parser(code, options = {}) {
     ASSERT(isIdentToken(tok_getType()), 'should be at ident');
     ASSERT(typeof astProp === 'string', 'astprop string');
 
+    // Private identifiers are only valid in class bodies and in expressions (this.#x, #x in obj).
+    // They are disallowed here (object literal/pattern property key). Allow/disallow is decided
+    // by parser production only — the lexer has no "class context" flag; it always lexes #ident as $ID_PRIVATE_IDENT.
+    if ($tp_propLeadingIdent_type === $ID_PRIVATE_IDENT) {
+      return THROW_RANGE('Private identifiers are not allowed in object literals or patterns', tok_getStart(), tok_getStop());
+    }
+
     // - `{ident,}`
     // - `{ident,}`
     // - `{key(){}`
@@ -12009,7 +12182,7 @@ function Parser(code, options = {}) {
 
     let $tp_name_canon = parseClassId(lexerFlags, optionalIdent, scoop);
 
-    _parseClass(lexerFlags, originalOuterLexerFlags, IS_STATEMENT);
+    _parseClass(lexerFlags, originalOuterLexerFlags, IS_STATEMENT, scoop);
 
     AST_close($tp_class_start, $tp_class_line, $tp_class_column, 'ClassDeclaration');
 
@@ -12042,7 +12215,7 @@ function Parser(code, options = {}) {
     // overwrite it, so there's no need to record/track it
     parseClassId(lexerFlags, IDENT_OPTIONAL, DO_NOT_BIND);
 
-    let assignable = _parseClass(lexerFlags, originalOuterLexerFlags, IS_EXPRESSION);
+    let assignable = _parseClass(lexerFlags, originalOuterLexerFlags, IS_EXPRESSION, undefined);
     AST_close($tp_class_start, $tp_class_line, $tp_class_column, 'ClassExpression');
 
     // The `await/yield` flags only describe the `extends` part. Additionally the class as a whole is not assignable.
@@ -12098,7 +12271,7 @@ function Parser(code, options = {}) {
 
     return $tp_bindingName_canon;
   }
-  function _parseClass(outerLexerFlags, originalOuterLexerFlags, isExpression) {
+  function _parseClass(outerLexerFlags, originalOuterLexerFlags, isExpression, enclosingScoop) {
     ASSERT(arguments.length === _parseClass.length, 'expecting all args');
     ASSERT(hasAllFlags(outerLexerFlags, LF_STRICT_MODE), 'should be set by caller');
     ASSERT(typeof originalOuterLexerFlags === 'number', 'originalOuterLexerFlags number');
@@ -12144,14 +12317,16 @@ function Parser(code, options = {}) {
     // _now_ enable super props, super call is already set up correctly
     // Note that computed props will not get this state from the current class (but potentially from an outer class)
     innerLexerFlags |= LF_SUPER_PROP;
+    // Private-in (#x in obj) is only valid within the class body that defines #x (spec: private name scope)
+    innerLexerFlags |= LF_IN_CLASS_BODY;
 
     // note: generator and async state is not reset because computed method names still use the outer state
     // Note: this `assignable` is relevant for passing back await/yield flags
-    assignable |= parseClassBody(innerLexerFlags, outerLexerFlags, originalOuterLexerFlags, isExpression, 'body');
+    assignable |= parseClassBody(innerLexerFlags, outerLexerFlags, originalOuterLexerFlags, isExpression, 'body', enclosingScoop);
 
     return assignable;
   }
-  function parseClassBody(lexerFlags, outerLexerFlags, originalOuterLexerFlags, isExpression, astProp) {
+  function parseClassBody(lexerFlags, outerLexerFlags, originalOuterLexerFlags, isExpression, astProp, enclosingScoop) {
     ASSERT(parseClassBody.length === arguments.length, 'expecting all args');
     ASSERT(hasAllFlags(lexerFlags, LF_STRICT_MODE), 'should be set by caller');
     ASSERT(hasNoFlag(lexerFlags, LF_IN_CONSTRUCTOR), 'should be unset by caller');
@@ -12167,12 +12342,12 @@ function Parser(code, options = {}) {
       loc: undefined,
       body: [],
     });
-    let assignable = _parseClassBody(lexerFlags, outerLexerFlags, originalOuterLexerFlags, isExpression, 'body');
+    let assignable = _parseClassBody(lexerFlags, outerLexerFlags, originalOuterLexerFlags, isExpression, 'body', enclosingScoop);
     AST_close($tp_curly_start, $tp_curly_line, $tp_curly_column, 'ClassBody');
     // Note: returning `assignable` is relevant for passing back await/yield flags that could occur in computed key exprs
     return assignable;
   }
-  function _parseClassBody(lexerFlags, outerLexerFlags, originalOuterLexerFlags, isExpression, astProp) {
+  function _parseClassBody(lexerFlags, outerLexerFlags, originalOuterLexerFlags, isExpression, astProp, enclosingScoop) {
     ASSERT(_parseClassBody.length === arguments.length, 'arg count');
     ASSERT(hasAllFlags(lexerFlags, LF_STRICT_MODE), 'should be set by caller');
     ASSERT(hasNoFlag(lexerFlags, LF_IN_CONSTRUCTOR), 'should be unset by caller');
@@ -12202,7 +12377,7 @@ function Parser(code, options = {}) {
       let $tp_memberStart_start = tok_getStart();
       let $tp_memberStart_stop = tok_getStop();
 
-      let destructNow = parseClassMethod(lexerFlags, outerLexerFlags, astProp);
+      let destructNow = parseClassMethod(lexerFlags, outerLexerFlags, astProp, enclosingScoop);
       if (hasAnyFlag(destructNow, PIGGY_BACK_WAS_CONSTRUCTOR)) {
         if (hasConstructor) {
           // TODO: we can juggle this "has constructor" state into the class parsers and throw there with a better loc
@@ -12240,7 +12415,7 @@ function Parser(code, options = {}) {
 
     return destructibleForPiggies;
   }
-  function parseClassMethod(lexerFlags, outerLexerFlags, astProp) {
+  function parseClassMethod(lexerFlags, outerLexerFlags, astProp, enclosingScoop) {
     // parseProperty parseMethod
     ASSERT(parseClassMethod.length === arguments.length, 'arg count');
     ASSERT(typeof astProp === 'string', 'astprop string');
@@ -12285,9 +12460,9 @@ function Parser(code, options = {}) {
       // - `class x {static async key(){}}`
       // - `class x {static async *key(){}}`
       // - `class x {static constructor(){}}`
-      // - `class x {static(){}}`
-      // - `class x {static static(){}}`
+      // - `class x {static(){}}`                   // ES2022: static blocks
       //             ^
+      // - `class x {static static(){}}`
       // - `class x {static get constructor(){}}`
 
       isStatic = true;
@@ -12301,11 +12476,17 @@ function Parser(code, options = {}) {
       // = `class x { static / foo(){} }`
       ASSERT_skipAny($ID_static, lexerFlags);
 
+      if (tok_getType() === $PUNC_CURLY_OPEN) {
+        if (!allowClassStaticBlock) {
+          return THROW_RANGE('Class static block is not supported in the currently targeted language version', $tp_static_start, tok_getStop());
+        }
+        return parseStaticBlock(lexerFlags, astProp, enclosingScoop);
+      }
       if (tok_getType() === $PUNC_PAREN_OPEN) {
         // The `static` ident here is the name of a method, not a modifier
         // - `class x {static(){}}`
         //                   ^
-        return _parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, false, $UNTYPED, $UNTYPED, $UNTYPED, $UNTYPED, $tp_static_start, $tp_static_stop, $tp_static_line, $tp_static_column, $tp_static_canon, astProp);
+        return _parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, false, $UNTYPED, $UNTYPED, $UNTYPED, $UNTYPED, $tp_static_start, $tp_static_stop, $tp_static_line, $tp_static_column, $tp_static_canon, astProp, false);
       }
     }
 
@@ -12352,7 +12533,7 @@ function Parser(code, options = {}) {
         // - `class x {*set(){}}`       // ok (not a setter!)
         // - `class x {*async(){}}`     // NOT an async generator! it's a generatr
 
-        return parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, $UNTYPED, $PUNC_STAR, $UNTYPED, $UNTYPED, astProp);
+        return parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, $UNTYPED, $PUNC_STAR, $UNTYPED, $UNTYPED, astProp, false);
       }
 
       if (isNumberStringToken(tok_getType())) {
@@ -12373,6 +12554,29 @@ function Parser(code, options = {}) {
     // - `class x {<?>`
     return THROW_RANGE('Unexpected token, wanted to parse a start of a property in an class literal/pattern', $tp_methodStart_line, tok_getStop());
   }
+  function parseClassField(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, $tp_key_type, $tp_key_start, $tp_key_stop, $tp_key_line, $tp_key_column, $tp_key_canon, astProp) {
+    ASSERT(parseClassField.length === arguments.length, 'arg count');
+    let keyNode = $tp_key_type === $ID_PRIVATE_IDENT
+      ? AST_getPrivateIdentNode($tp_key_start, $tp_key_stop, $tp_key_line, $tp_key_column, $tp_key_canon)
+      : AST_getIdentNode($tp_key_start, $tp_key_stop, $tp_key_line, $tp_key_column, $tp_key_canon);
+    AST_open(astProp, {
+      type: 'PropertyDefinition',
+      loc: undefined,
+      key: keyNode,
+      value: undefined,
+      computed: false,
+      static: isStatic,
+    });
+    ASSERT_skipAny($PUNC_EQ, lexerFlags);
+    let $tp_value_start = tok_getStart();
+    let $tp_value_line = tok_getLine();
+    let $tp_value_column = tok_getColumn();
+    let assignable = parseValue(lexerFlags, ASSIGN_EXPR_IS_OK, NOT_NEW_ARG, NOT_LHSE, 'value');
+    let $tp_value_stop = tok_prevEndPointer();
+    parseExpressionFromOp(lexerFlags, $tp_value_start, $tp_value_stop, $tp_value_line, $tp_value_column, assignable, 'value');
+    AST_close($tp_methodStart_start, $tp_methodStart_line, $tp_methodStart_column, 'PropertyDefinition');
+    return CANT_DESTRUCT;
+  }
   function parseClassMethodFromIdent(lexerFlags, outerLexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, astProp) {
     ASSERT(parseClassMethodFromIdent.length === arguments.length, 'arg count');
     ASSERT(typeof astProp === 'string', 'astprop string');
@@ -12386,6 +12590,8 @@ function Parser(code, options = {}) {
     //             ^^^
     // - `class x {set key(x){}}`
     //             ^^^
+    // - `class x {#priv(){}}`  (ES2022 private method)
+    // - `class x {#field = 1}`  (ES2022 private field)
 
     let $tp_ident_type = tok_getType();
     let $tp_ident_line = tok_getLine();
@@ -12394,13 +12600,48 @@ function Parser(code, options = {}) {
     let $tp_ident_stop = tok_getStop();
     let $tp_ident_canon = tok_getCanoN();
 
+    if ($tp_ident_type === $ID_PRIVATE_IDENT && !allowPrivateClassFields) {
+      return THROW_RANGE('Private class fields and methods are not supported in the currently targeted language version', $tp_ident_start, $tp_ident_stop);
+    }
+
     ASSERT_skipAny($G_IDENT, lexerFlags);
+
+    if (tok_getType() === $PUNC_EQ) {
+      let allowFieldInit = ($tp_ident_type === $ID_PRIVATE_IDENT ? allowPrivateClassFields : allowPublicClassFields);
+      if (!allowFieldInit) {
+        return THROW_RANGE('Class field initializers are not supported in the currently targeted language version', $tp_ident_start, tok_getStop());
+      }
+      // Class field: `ident = expr` or `#ident = expr`
+      return parseClassField(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, $tp_ident_type, $tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon, astProp);
+    }
 
     if (tok_getType() === $PUNC_PAREN_OPEN) {
       // Simple method shorthand
       // - `class x {ident(){}}`
       //                  ^
-      return _parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, $UNTYPED, $UNTYPED, $UNTYPED, $UNTYPED, $tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon, astProp);
+      // - `class x {#priv(){}}`
+      return _parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, $UNTYPED, $UNTYPED, $UNTYPED, $UNTYPED, $tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon, astProp, $tp_ident_type === $ID_PRIVATE_IDENT);
+    }
+
+    if (tok_getType() === $PUNC_SEMI || tok_getType() === $PUNC_CURLY_CLOSE) {
+      // Class field without initializer: `ident;` or `#ident;` (ES2022)
+      let allowFieldNoInit = ($tp_ident_type === $ID_PRIVATE_IDENT ? allowPrivateClassFields : allowPublicClassFields);
+      if (!allowFieldNoInit) {
+        return THROW_RANGE('Class field declarations without initializer are not supported in the currently targeted language version', $tp_ident_start, tok_getStop());
+      }
+      let keyNode = $tp_ident_type === $ID_PRIVATE_IDENT
+        ? AST_getPrivateIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon)
+        : AST_getIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon);
+      AST_open(astProp, {
+        type: 'PropertyDefinition',
+        loc: undefined,
+        key: keyNode,
+        value: null,
+        computed: false,
+        static: isStatic,
+      });
+      AST_close($tp_methodStart_start, $tp_methodStart_line, $tp_methodStart_column, 'PropertyDefinition');
+      return CANT_DESTRUCT;
     }
 
     // The "key" in the next is one of ident, string, number, or computed property
@@ -12510,15 +12751,19 @@ function Parser(code, options = {}) {
     }
 
     if (isIdentToken(tok_getType())) {
-      return parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, $tp_async_type, $tp_star_type, $tp_get_type, $tp_set_type, astProp);
+      if (tok_getType() === $ID_PRIVATE_IDENT && !allowPrivateClassFields) {
+        return THROW_RANGE('Private class fields and methods are not supported in the currently targeted language version', tok_getStart(), tok_getStop());
+      }
+      return parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, $tp_async_type, $tp_star_type, $tp_get_type, $tp_set_type, astProp, undefined);
     }
 
     // Stuff like incompatible modifiers, obj lit syntax, invalid tokens, etc
     return THROW_RANGE('Expected to parse the modified key of a class method but could not parse one', tok_getStart(), tok_getStop());
   }
-  function parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, $tp_async_type, $tp_star_type, $tp_get_type, $tp_set_type, astProp) {
+  function parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, $tp_async_type, $tp_star_type, $tp_get_type, $tp_set_type, astProp, isPrivateKey) {
     ASSERT(parseClassMethodIdentKey.length === arguments.length, 'arg count');
     ASSERT(isIdentToken(tok_getType()), 'current is ident');
+    if (isPrivateKey === undefined) isPrivateKey = (tok_getType() === $ID_PRIVATE_IDENT);
 
     let $tp_key_line = tok_getLine();
     let $tp_key_column = tok_getColumn();
@@ -12527,12 +12772,17 @@ function Parser(code, options = {}) {
     let $tp_key_canon = tok_getCanoN(); // Note: constructor is tested elsewhere
 
     ASSERT_skipToParenOpenOrDie($G_IDENT, lexerFlags);
-    return _parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, $tp_async_type, $tp_star_type, $tp_get_type, $tp_set_type, $tp_key_start, $tp_key_stop, $tp_key_line, $tp_key_column, $tp_key_canon, astProp);
+    return _parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, $tp_async_type, $tp_star_type, $tp_get_type, $tp_set_type, $tp_key_start, $tp_key_stop, $tp_key_line, $tp_key_column, $tp_key_canon, astProp, isPrivateKey);
   }
-  function _parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, $tp_async_type, $tp_star_type, $tp_get_type, $tp_set_type, $tp_key_start, $tp_key_stop, $tp_key_line, $tp_key_column, $tp_key_canon, astProp) {
+  function _parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, isStatic, $tp_async_type, $tp_star_type, $tp_get_type, $tp_set_type, $tp_key_start, $tp_key_stop, $tp_key_line, $tp_key_column, $tp_key_canon, astProp, isPrivateKey) {
     ASSERT(_parseClassMethodIdentKey.length === arguments.length, 'arg count');
+    if (isPrivateKey === undefined) isPrivateKey = false;
 
-    AST_setIdent(astProp, $tp_key_start, $tp_key_stop, $tp_key_line, $tp_key_column, $tp_key_canon);
+    if (isPrivateKey) {
+      AST_setNode(astProp, AST_getPrivateIdentNode($tp_key_start, $tp_key_stop, $tp_key_line, $tp_key_column, $tp_key_canon));
+    } else {
+      AST_setIdent(astProp, $tp_key_start, $tp_key_stop, $tp_key_line, $tp_key_column, $tp_key_canon);
+    }
 
     if (isStatic && $tp_key_canon === 'prototype') {
       return THROW_RANGE('Static class methods can not be called `prototype`', $tp_methodStart_line, tok_getStop());
@@ -13001,6 +13251,9 @@ function Parser(code, options = {}) {
         let assignableOrErrorMsg = nonFatalBindingIdentCheck($tp_ident_type, $tp_ident_start, $tp_ident_stop, $tp_ident_canon, bindingType, lexerFlags);
         ASSERT(typeof assignableOrErrorMsg === 'string', 'func should always return string');
         if (assignableOrErrorMsg.length !== 0) {
+          if (bindingType !== BINDING_TYPE_NONE) {
+            return THROW_RANGE('Cannot use this name (`' + tok_sliceInput($tp_ident_start, $tp_ident_stop) + '`) as a variable name because: ' + assignableOrErrorMsg, $tp_ident_start, $tp_ident_stop);
+          }
           // - `[...await] = obj`
           // - `[...this];`
           destructible |= CANT_DESTRUCT;

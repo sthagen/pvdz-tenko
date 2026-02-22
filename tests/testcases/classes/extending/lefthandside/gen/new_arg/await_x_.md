@@ -75,13 +75,13 @@ Parsed with the module goal.
 
 `````
 throws: Parser error!
-  Cannot use `await` as var when goal=module but found `await` outside an async function
+  Cannot `await` as the arg of `new`
 
-start@1:0, error@2:0
+start@1:0, error@1:4
 ╔══╦════════════════
  1 ║ new await
+   ║     ^^^^^------- error
  2 ║ x;
-   ║ ^------- error
 ╚══╩════════════════
 
 `````
@@ -103,7 +103,7 @@ _Output same as module mode._
 Printer output different from input [sloppy][annexb:no]:
 
 ````js
-new await();
+new await;
 x;
 ````
 

@@ -54,9 +54,6 @@ let ASSERT = (...args) => {
   else _ASSERT(...args);
 };
 
-
-console.log('Start of Tenko test suite');
-
 const INPUT_OVERRIDE = decodeUnicode(process.argv.includes('-F') ? fs.readFileSync(process.argv[process.argv.indexOf('-F') + 1], 'utf8') : process.argv.includes('-i') ? process.argv[process.argv.indexOf('-i') + 1] : '');
 const TARGET_FILE = process.argv.includes('-f') ? process.argv[process.argv.indexOf('-f') + 1] : '';
 const SEARCH = process.argv.includes('-s');
@@ -85,6 +82,8 @@ const TARGET_ES9 = process.argv.includes('--es9');
 const TARGET_ES10 = process.argv.includes('--es10');
 const TARGET_ES11 = process.argv.includes('--es11');
 const TARGET_ES12 = process.argv.includes('--es12');
+const TARGET_ES13 = process.argv.includes('--es13');
+const TARGET_ES14 = process.argv.includes('--es14');
 const TESTS_ONLY = process.argv.includes('-n'); // skip constructing updated test files, dont write anything. Used for code coverage
 const RUN_VERBOSE_IN_SERIAL = process.argv.includes('--serial') || (!SEARCH && !TESTS_ONLY && (INPUT_OVERRIDE || TARGET_FILE || STOP_AFTER_TEST_FAIL || STOP_AFTER_FILE_FAIL));
 const FORCE_WRITE = process.argv.includes('--force-write');
@@ -97,12 +96,15 @@ const TEST_ACORN = COMPARE_ACORN && (!AUTO_UPDATE || CONFIRMED_UPDATE); // ignor
 const TEST_BABEL = COMPARE_BABEL && (!AUTO_UPDATE || CONFIRMED_UPDATE); // ignore this flag with -u, we dont want to record babel deltas into test files
 const NO_FATALS = process.argv.includes('--no-fatals'); // asserts should not stop a full auto run (dev tool, rely on git etc for recovery...)
 const CONCISE = process.argv.includes('--concise');
+const QUIET_FILE = process.argv.includes('--quiet'); // With -f: only print PASS/FAIL line
 const USE_BUILD = process.argv.includes('-b') || process.argv.includes('--build');
 const SKIP_PRINTER = process.argv.includes('--no-printer'); // || USE_BUILD;
 const EXPOSE_SCOPE = process.argv.includes('--expose-scope');
 
 const TENKO_DEV_FILE = '../src/index.mjs';
 const TENKO_PROD_FILE = '../build/tenko.prod.mjs';
+
+if (!QUIET_FILE) console.log('Start of Tenko test suite');
 
 if (TEST_BABEL && TEST_ACORN) throw new Error('Cannot test Babel and Acorn at the same time. Pick one.');
 if (TEST_ACORN) console.log('Running in Acorn compat mode and comparing to actual Acorn Parser output');
@@ -143,22 +145,24 @@ if (process.argv.includes('-?') || process.argv.includes('--help')) {
     --test-acorn  Also show diff with Acorn AST / pass/fail with test cases (not the same as --acorn !)
     --test-babel  Also show diff with Babel AST / pass/fail with test cases (not the same as --babel !)
     --all         Force to run all four modes (on input)
-    --esX         Where X is one of 6 through 10, like --es6. For -i only, forces the code to run in that version
+    --esX         Where X is 6..14 (e.g. --es10). With -i, forces that ES version for the parse.
+                  Test files can set \`- \`es = N\`\` (N 6..14) under ## Input for a per-test version; --esX overrides that when given.
     --serial      Test all targeted files in serial, verbosely, instead of using parallel phases (which is faster)
                   (Note: -q, -i, and -f implicitly enable --serial)
     --no-printer  Skip running Printer on input
     --min         Brute-force simplify a test case that throws an error while maintaining the same error message, only with -f, implies --sloppy
-      -- write    For reducer only; write result to new file
+      --write     For reducer (--min) only; write result to new file
     --min-printer Minimize a Printer-failing input case
     --force-write Always write the test cases to disk, even when no change was detected
     --no-fatals   Do not treat (test) assertion errors as fatals (dev tools only, rely on git etc for recovery)
     --concise     Do not dump AST and printer output to stdout. Parse and stop. Only works with -i or -f or -F
+    --quiet       With -f: only print the PASS/FAIL line (auto implied for ./t ff)
     --expose-scope Add generated scope objects as \`.$scope\` property for nodes that generate a scope. Good luck that that that...
 `);
   process.exit();
 }
 
-const FORCED_ES_TARGET = TARGET_ES6 ? 6 : TARGET_ES7 ? 7 : TARGET_ES8 ? 8 : TARGET_ES9 ? 9 : TARGET_ES10 ? 10 : TARGET_ES11 ? 11 : TARGET_ES12 ? 12 : undefined;
+const FORCED_ES_TARGET = TARGET_ES6 ? 6 : TARGET_ES7 ? 7 : TARGET_ES8 ? 8 : TARGET_ES9 ? 9 : TARGET_ES10 ? 10 : TARGET_ES11 ? 11 : TARGET_ES12 ? 12 : TARGET_ES13 ? 13 : TARGET_ES14 ? 14 : undefined;
 if (FORCED_ES_TARGET) console.log('Forcing target version: ES' + FORCED_ES_TARGET);
 
 if (AUTO_UPDATE && (AUTO_GENERATE || AUTO_GENERATE_CONSERVATIVE)) throw new Error('Cannot use auto update and auto generate together');
@@ -240,9 +244,9 @@ async function extractFiles(list) {
     bytes += tob.inputCode.length;
   });
   if (!RUN_VERBOSE_IN_SERIAL) console.timeEnd('$$ Test file extraction time');
-  console.log('Total input size:', bytes, 'bytes');
+  if (!QUIET_FILE) console.log('Total input size:', bytes, 'bytes');
 }
-function coreTest(tob, tenko, testVariant, annexB, enableCodeFrame = false, code = tob.inputCode, verbose = !!(INPUT_OVERRIDE || TARGET_FILE)) {
+function coreTest(tob, tenko, testVariant, annexB, enableCodeFrame = false, code = tob.inputCode, verbose = !QUIET_FILE && !!(INPUT_OVERRIDE || TARGET_FILE)) {
   wasHits = [];
   hitsToReport = wasHits;
   let r, e = '';
@@ -271,6 +275,7 @@ function coreTest(tob, tenko, testVariant, annexB, enableCodeFrame = false, code
 
         errorCodeFrame: enableCodeFrame,
         truncCodeFrame: true,
+        alwaysAllowOctalEscapes: tob.inputOptions.alwaysAllowOctalEscapes || false,
 
         $log: verbose ? undefined : (...a) => stdout.push(a),
         $warn: verbose ? undefined : (...a) => stdout.push(a),
@@ -287,8 +292,12 @@ function coreTest(tob, tenko, testVariant, annexB, enableCodeFrame = false, code
     }
 
     // Test the ast printer
-    // We only really need to test it once for whatever run passes
+    // We only really need to test it once for whatever run passes. Pass parse options so re-parse uses same options (e.g. alwaysAllowOctalEscapes).
     if (!SKIP_PRINTER && !tob.printerOutput) {
+      const printerParseOptions = {};
+      if (tob.inputOptions.alwaysAllowOctalEscapes) printerParseOptions.alwaysAllowOctalEscapes = true;
+      const esVersion = FORCED_ES_TARGET ?? tob.inputOptions.es;
+      if (esVersion !== undefined && esVersion !== null) printerParseOptions.targetEsVersion = esVersion;
       tob.printerOutput = testPrinter(
         code,
         testVariant,
@@ -297,10 +306,11 @@ function coreTest(tob, tenko, testVariant, annexB, enableCodeFrame = false, code
         !INPUT_OVERRIDE && !TARGET_FILE && (AUTO_UPDATE && !CONFIRMED_UPDATE),
         REDUCING_PRINTER,
         !REDUCING_PRINTER || BABEL_COMPAT || ACORN_COMPAT,
-        verbose
+        verbose,
+        printerParseOptions
       );
       if (tob.printerOutput[2] !== 'same' && tob.printerOutput[2] !== 'diff-same') {
-        tob.continuePrint = 'Printer output needs attention [' + tob.printerOutput[2] + ']';
+        tob.continuePrint = 'Printer output needs attention [' + tob.printerOutput[2] + ']' + (tob.printerOutput[1] ? '\n' + tob.printerOutput[1] : '');
       }
 
       // Assert that the walker works properly. The first phase adds a new key to each node and throws an error if
@@ -411,7 +421,6 @@ async function postProcessResult(tob/*: Tob */, testVariant/*: "sloppy" | "stric
     errorMessage = e.message;
     if (errorMessage.includes('Assertion fail')) {
       stdout.forEach(a => console.log.apply(console, a));
-
       console.error('####\nAn ' + BLINK + 'assertion' + RESET + ' error was thrown in ' + BOLD + testVariant + RESET + ' mode with annexB=' + annexB + '\n');
       console.error(BOLD + 'Input:' + RESET + '\n\n`````\n' + tob.inputCode + '\n`````\n\n' + BOLD + 'Error message:' + RESET + '\n');
       console.error(errorMessage);
@@ -430,8 +439,6 @@ async function postProcessResult(tob/*: Tob */, testVariant/*: "sloppy" | "stric
     }
     else {
       stdout.forEach(a => console.log.apply(console, a));
-
-      // errorMessage = 'TEMP SKIPPED UNKNOWN ERROR';
       console.error('####\nThe following ' + BLINK + 'unexpected' + RESET + ' error was thrown in ' + BOLD + testVariant + RESET + ' mode with annexB=' + annexB + ':\n');
       console.error(errorMessage);
       console.error(e.stack);
@@ -481,7 +488,7 @@ async function postProcessResult(tob/*: Tob */, testVariant/*: "sloppy" | "stric
     // Acorn does not support sloppy/strict switch and always enables annexb rules, so do not check other combos
     tob.compareWhiteListed = ignoreTenkoTestForAcorn(tob.fileShort);
     acornMatchError = processAcornResult(acornOk, acornFail, !!e, zasa, tob, TEST_ACORN, INPUT_OVERRIDE);
-    if (acornMatchError && TARGET_FILE) {
+    if (acornMatchError && TARGET_FILE && !QUIET_FILE) {
       console.log('acornMatchError:', BOLD, acornMatchError, RESET)
       // throw new Error(babelMatchError)
     }
@@ -613,6 +620,7 @@ async function runTest(list, tenko, testVariant/*: "sloppy" | "strict" | "module
 }
 
 function showDiff(tob) {
+  if (QUIET_FILE) return;
   console.log(
     '\n' +
     BOLD + '######' + RESET + '\n' +
@@ -900,8 +908,25 @@ async function cli(tenko) {
 
 async function main(tenko) {
   if (TARGET_FILE) {
-    console.log('Using explicit file:', TARGET_FILE);
-    files = [TARGET_FILE];
+    // Check if TARGET_FILE is a directory
+    try {
+      const stats = fs.statSync(TARGET_FILE);
+      if (stats.isDirectory()) {
+        if (!QUIET_FILE) console.log('Using target directory:', TARGET_FILE);
+        const targetFiles = [];
+        // Normalize path: getTestFiles expects path without trailing slash
+        const normalizedPath = TARGET_FILE.endsWith('/') ? TARGET_FILE.slice(0, -1) : TARGET_FILE;
+        getTestFiles(normalizedPath, '', targetFiles, true);
+        files = targetFiles.filter(f => f.endsWith('.md'));
+      } else {
+        if (!QUIET_FILE) console.log('Using explicit file:', TARGET_FILE);
+        files = [TARGET_FILE];
+      }
+    } catch (e) {
+      // File doesn't exist, treat as single file (will error later if needed)
+      if (!QUIET_FILE) console.log('Using explicit file:', TARGET_FILE);
+      files = [TARGET_FILE];
+    }
   } else {
     files = files.filter(f => !f.endsWith('autogen.md'));
   }
@@ -912,12 +937,12 @@ async function main(tenko) {
   let list = await readFiles(files);
   if (!TARGET_FILE) list = list.filter(tob => !tob.fileShort.startsWith('tests/testcases/todo/')); // Skip todo dir unless explicitly asking for it
   if (!RUN_VERBOSE_IN_SERIAL) console.timeEnd('$$ Test file read time');
-  console.log('Read', list.length, 'files');
+  if (!QUIET_FILE) console.log('Read', list.length, 'files');
 
   await extractFiles(list);
   let beforeLen = list.length;
   if (!TARGET_FILE) list = list.filter(tob => !tob.aboveTheFold.toLowerCase().includes('\n## skip\n'));
-  console.log('Filtered', beforeLen - list.length,'skipped tests (containing `## skip`)');
+  if (!QUIET_FILE) console.log('Filtered', beforeLen - list.length,'skipped tests (containing `## skip`)');
 
   if (RUN_VERBOSE_IN_SERIAL) {
     for (let i=0; i<list.length && !stopAsap; ++i) {
@@ -938,31 +963,33 @@ async function main(tenko) {
       } else if (tob.compareSkippedExplicitVersion) {
         skippedOtherParserList.push(tob.fileShort);
         console.log(BOLD + GREEN + 'SKIP' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET + ' (file skipped because it targets a specific ES version and we dont care about those cases here)');
-      } else if (tob.oldData !== tob.newData) {
-        console.log(BOLD + RED + 'FAIL' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET);
+      } else if (tob.continuePrint) {
+        console.log(BOLD + RED + 'FAIL' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET + ' (' + tob.continuePrint + ')');
       } else {
         console.log(BOLD + GREEN + 'PASS' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET);
       }
     }
-    if (skippedOtherParserList.length) {
-      console.log(BOLD + 'Properly ignored these files:' + RESET);
-      // console.log(skippedOtherParserList.sort().join('\n'))
+    if (!QUIET_FILE) {
+      if (skippedOtherParserList.length) {
+        console.log(BOLD + 'Properly ignored these files:' + RESET);
+        // console.log(skippedOtherParserList.sort().join('\n'))
+      }
+      if (unexpectedPass.length) {
+        console.log(BOLD + 'These files were whitelisted but they already match:' + RESET);
+        console.log(unexpectedPass.sort().join('\n'))
+      }
+      if (unxepctedFails.length) {
+        console.log(BOLD + 'These files did not match and were not whitelisted:' + RESET);
+        console.log(unxepctedFails.sort().join('\n'))
+      }
+      console.log('Match status: whitelisted: ' + skippedOtherParserList.length + 'x, unexpected misses: ' + unxepctedFails.length + 'x, unexpected passes: ' + unexpectedPass.length + 'x');
+      if (unxepctedFails.length || unexpectedPass.length) console.log('Use -q to stop immediately on an unexpected miss/match');
     }
-    if (unexpectedPass.length) {
-      console.log(BOLD + 'These files were whitelisted but they already match:' + RESET);
-      console.log(unexpectedPass.sort().join('\n'))
-    }
-    if (unxepctedFails.length) {
-      console.log(BOLD + 'These files did not match and were not whitelisted:' + RESET);
-      console.log(unxepctedFails.sort().join('\n'))
-    }
-    console.log('Match status: whitelisted: ' + skippedOtherParserList.length + 'x, unexpected misses: ' + unxepctedFails.length + 'x, unexpected passes: ' + unexpectedPass.length + 'x');
-    if (unxepctedFails.length || unexpectedPass.length) console.log('Use -q to stop immediately on an unexpected miss/match');
   } else {
     await runAndRegenerateList(list, tenko);
   }
 
-  console.timeEnd('$$ Whole test run');
+  if (!QUIET_FILE) console.timeEnd('$$ Whole test run');
 }
 
 function sanitize(dir) {
@@ -1242,7 +1269,7 @@ async function loadParsers() {
   return tenko;
 }
 
-console.time('$$ Whole test run');
+if (!QUIET_FILE) console.time('$$ Whole test run');
 
 let files = [];
 if (INPUT_OVERRIDE) {
@@ -1256,7 +1283,7 @@ if (INPUT_OVERRIDE) {
   if (!RUN_VERBOSE_IN_SERIAL) console.time('$$ Test search discovery time');
   getTestFiles(path.join(dirname, 'testcases'), '', files, true);
   if (!RUN_VERBOSE_IN_SERIAL) console.timeEnd('$$ Test search discovery time');
-  console.log('Read all test files, gathered', files.length, 'files');
+  if (!QUIET_FILE) console.log('Read all test files, gathered', files.length, 'files');
 }
 
 if (AUTO_GENERATE || AUTO_GENERATE_CONSERVATIVE) {

@@ -265,18 +265,22 @@ function parseTestFile(tob) {
       ASSERT(is === '=', 'separate the key and value of input options with a `=` and surrounding spaces', ' ' + file + ' ', s);
 
       let value = v.join(' ');
-      if (String(parseFloat(value)) === value) value = parseFloat(v);
+      // Skip template placeholders (used in autogen.md files)
+      if (value === '#') value = undefined;
+      else if (String(parseFloat(value)) === value) value = parseFloat(value);
       else if (value === 'true') value = true;
       else if (value === 'false') value = false;
       else if (value === 'undefined') value = undefined;
       else if (value === 'null') value = null;
+      else if (value === 'Infinity') value = Infinity;
+      else if (value === '-Infinity') value = -Infinity;
 
       obj[k] = value;
 
       return obj;
     }, {});
 
-  const {es, astUids, locationTracking, ranges, nodeRange, exposeScopes, ...unsupported} = tob.inputOptions
+  const {es, astUids, locationTracking, ranges, nodeRange, exposeScopes, alwaysAllowOctalEscapes, ...unsupported} = tob.inputOptions
 
   // If this triggers then the line above may need updating
   ASSERT(JSON.stringify(unsupported) === '{}', 'options have hardcoded support in the test suite so if a new option needs support, make sure to connect it first, then update this assert. Unhandled options: ' + JSON.stringify(unsupported) + ', file: ' + tob.fileShort);

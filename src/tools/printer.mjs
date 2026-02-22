@@ -104,6 +104,9 @@ function BinaryExpression(node) {
         left = '(' + left + ')';
       }
       break;
+    case 'PrivateIdentifier':
+      // #x in obj
+      break;
     default:
       left = '(' + left + ')';
   }
@@ -129,6 +132,10 @@ function BinaryExpression(node) {
 function BlockStatement(node) {
   assert(node.type, 'BlockStatement');
   return '{' + node.body.map($).join('\n') + '}';
+}
+function StaticBlock(node) {
+  assert(node.type, 'StaticBlock');
+  return 'static {' + node.body.map($).join('\n') + '}';
 }
 function BooleanLiteral(node) {
   assert(node.type, 'BooleanLiteral');
@@ -167,13 +174,20 @@ function ClassBody(node) {
   assert(node.type, 'ClassBody');
   return '{' + node.body.map($).join('\n') + '}';
 }
+function needsExtendsParens(superClass) {
+  // Wrap only when needed; unwrapped CallExpression/MemberExpression/Identifier preserve LF_IN_GLOBAL for top-level await.
+  const noParen = ['Identifier', 'MemberExpression', 'CallExpression', 'NewExpression'];
+  return !noParen.includes(superClass.type);
+}
 function ClassDeclaration(node) {
   assert(node.type, 'ClassDeclaration');
-  return 'class' + (node.id ? ' ' + $(node.id) : '') + (node.superClass ? ' extends (' + $(node.superClass) + ') ' : '') + $(node.body);
+  const ext = node.superClass ? ' extends ' + (needsExtendsParens(node.superClass) ? '(' + $(node.superClass) + ')' : $(node.superClass)) + ' ' : '';
+  return 'class' + (node.id ? ' ' + $(node.id) : '') + ext + $(node.body);
 }
 function ClassExpression(node) {
   assert(node.type, 'ClassExpression');
-  return 'class' + (node.id ? ' ' + $(node.id) : '') + (node.superClass ? ' extends (' + $(node.superClass) + ') ' : '') + $(node.body);
+  const ext = node.superClass ? ' extends ' + (needsExtendsParens(node.superClass) ? '(' + $(node.superClass) + ')' : $(node.superClass)) + ' ' : '';
+  return 'class' + (node.id ? ' ' + $(node.id) : '') + ext + $(node.body);
 }
 function ClassMethod(node) {
   assert(node.type, 'ClassMethod');
@@ -472,6 +486,7 @@ function MemberExpression(node) {
     // node.object.type === 'MemberExpression' ||           // a.b.c -> (a.b).c
     // node.object.type === 'Identifier' ||                 // a.b -> (a).b
     // node.object.type === 'CallExpression' ||             // -> a().b -> (a()).b
+    node.object.type === 'NewExpression' ||                 // (new x())[y] not new x()[y]
     node.object.type === 'UnaryExpression' ||               // `(!t).y`
     node.object.type === 'ArrowFunctionExpression' ||       // ()=>x.y -> (()=>x).y
     node.object.type === 'UpdateExpression' ||              // `(++x)[x]`
@@ -511,23 +526,34 @@ function MethodDefinition(node) {
 }
 function NewExpression(node) {
   assert(node.type, 'NewExpression');
+  // import.meta as callee needs parens so it prints as new (import.meta) not new import.meta()
+  if (node.callee.type === 'MetaProperty') {
+    return node.arguments.length === 0
+      ? 'new ' + $w(node.callee)
+      : 'new ' + $w(node.callee) + '(' + node.arguments.map($).join(', ') + ')';
+  }
+  // new super() must print with () so it round-trips (new super would parse differently)
+  if (node.callee.type === 'Super') {
+    return 'new ' + $(node.callee) + '(' + node.arguments.map($).join(', ') + ')';
+  }
   if (
-    node.callee.type === 'Super'
-    || node.callee.type === 'Import'
+    node.callee.type === 'Import'
     || node.callee.type === 'Identifier'
     || node.callee.type === 'Literal'
     // || node.callee.type === 'MemberExpression'         // new x().y -> new (x().y)
     // || node.callee.type === 'CallExpression'           // new x()() -> new (x())()
     || node.callee.type === 'ArrayExpression'             // new []     Runtime error...?
     || node.callee.type === 'ObjectExpression'            // new {}     Runtime error...?
-    || node.callee.type === 'MetaProperty'                // new new.target
+    // MetaProperty handled above; Super handled above (new super() needs ())
     // || node.callee.type === 'TaggedTemplateExpression' // new foo``() -> new (foo``)
     || node.callee.type === 'TemplateLiteral'             // new `foo`  Runtime error?
     || node.callee.type === 'ThisExpression'              // new this   (Could be made to work)
   ) {
-    return 'new ' + $(node.callee) + '(' + node.arguments.map($).join(', ') + ')';
+    const args = node.arguments.length ? '(' + node.arguments.map($).join(', ') + ')' : '';
+    return 'new ' + $(node.callee) + args;
   }
-  return 'new ' + $w(node.callee) + '(' + node.arguments.map($).join(', ') + ')';
+  const args = node.arguments.length ? '(' + node.arguments.map($).join(', ') + ')' : '';
+  return 'new ' + $w(node.callee) + args;
 }
 function NullLiteral(node) {
   assert(node.type, 'NullLiteral');
@@ -672,6 +698,14 @@ function UnaryExpression(node) {
 
   return node.operator + ('!+-~'.includes(node.operator)?'':' ') + $w(node.argument);
 }
+function PrivateIdentifier(node) {
+  assert(node.type, 'PrivateIdentifier');
+  return '#' + node.name;
+}
+function PropertyDefinition(node) {
+  assert(node.type, 'PropertyDefinition');
+  return (node.static ? 'static ' : '') + $(node.key) + (node.value != null ? ' = ' + $(node.value) : '') + ';';
+}
 function UpdateExpression(node) {
   assert(node.type, 'UpdateExpression');
   return (node.prefix ? node.operator : '') + $(node.argument) + (node.prefix ? '' : node.operator);
@@ -708,6 +742,8 @@ let jumpTable = [
       if (c === $$D_UC_44) return ExportDefaultDeclaration(node);
       return ExportNamespaceSpecifier(node);
     }
+    if (type === 'PrivateIdentifier') return PrivateIdentifier(node);
+    if (type === 'PropertyDefinition') return PropertyDefinition(node);
     return UpdateExpression(node);
   },
   (node, fromFor, type, c) => {
@@ -728,6 +764,7 @@ let jumpTable = [
     if (c === $$A_61) return ClassExpression(node);
     if (c === $$M_6D) return CommentBlock(node);
     if (c === $$P_70) return EmptyStatement(node);
+    if (type === 'PrivateIdentifier') return PrivateIdentifier(node);
     return ForStatement(node);
   },
   (node, fromFor, type, c) => {
@@ -861,6 +898,7 @@ let jumpTable = [
     return TryStatement(node);
   },
   (node, fromFor, type, c) => {
+    if (type === 'StaticBlock') return StaticBlock(node);
     return DoWhileStatement(node);
   },
 ];

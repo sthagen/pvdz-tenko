@@ -49,6 +49,7 @@ const $L_NL_CRLF = ++__$flag_leaf;
 const $L_COMMENT_SINGLE = ++__$flag_leaf;
 const $L_COMMENT_MULTI = ++__$flag_leaf;
 const $L_COMMENT_HTML = ++__$flag_leaf;
+const $L_COMMENT_HASHBANG = ++__$flag_leaf;
 const $L_IDENT = 0; // This is a hack which causes the leaf bits to be clear. This way (value | $IDENT) yields, at least, $IDENT without destroying an $ID_foo special keyword
 const $L_NUMBER_HEX = ++__$flag_leaf;
 const $L_NUMBER_DEC = ++__$flag_leaf;
@@ -57,6 +58,7 @@ const $L_NUMBER_OCT = ++__$flag_leaf;
 const $L_NUMBER_OLD = ++__$flag_leaf;
 const $L_REGEXN = ++__$flag_leaf;
 const $L_REGEXU = ++__$flag_leaf;
+const $L_REGEXV = ++__$flag_leaf;
 const $L_STRING_SINGLE = ++__$flag_leaf;
 const $L_STRING_DOUBLE = ++__$flag_leaf;
 const $L_TICK_HEAD = ++__$flag_leaf;
@@ -124,6 +126,7 @@ const $L_ID_void = ++__$flag_leaf;
 const $L_ID_while = ++__$flag_leaf;
 const $L_ID_with = ++__$flag_leaf;
 const $L_ID_yield = ++__$flag_leaf;
+const $L_ID_PRIVATE_IDENT = ++__$flag_leaf; // # followed by IdentifierName (private class field/method name)
 
 // Punctuators
 
@@ -203,6 +206,7 @@ const $NL_CRLF = $L_NL_CRLF | $G_WHITE | $G_NEWLINE;
 const $COMMENT_SINGLE = $L_COMMENT_SINGLE | $G_COMMENT | $G_WHITE;
 const $COMMENT_MULTI = $L_COMMENT_MULTI | $G_COMMENT | $G_WHITE;
 const $COMMENT_HTML = $L_COMMENT_HTML | $G_COMMENT | $G_WHITE;
+const $COMMENT_HASHBANG = $L_COMMENT_HASHBANG | $G_COMMENT | $G_WHITE;
 const $IDENT = $L_IDENT | $G_IDENT;
 const $ID_arguments = $L_ID_arguments | $G_IDENT;
 const $ID_as = $L_ID_as | $G_IDENT;
@@ -259,6 +263,7 @@ const $ID_void = $L_ID_void | $G_IDENT;
 const $ID_while = $L_ID_while | $G_IDENT;
 const $ID_with = $L_ID_with | $G_IDENT;
 const $ID_yield = $L_ID_yield | $G_IDENT;
+const $ID_PRIVATE_IDENT = $L_ID_PRIVATE_IDENT | $G_IDENT;
 const $NUMBER_HEX = $L_NUMBER_HEX | $G_NUMBER;
 const $NUMBER_DEC = $L_NUMBER_DEC | $G_NUMBER;
 const $NUMBER_BIN = $L_NUMBER_BIN | $G_NUMBER;
@@ -329,6 +334,7 @@ const $PUNC_CURLY_CLOSE = $L_CURLY_CLOSE | $G_PUNCTUATOR;
 const $PUNC_TILDE = $L_TILDE | $G_PUNCTUATOR;
 const $REGEXN = $L_REGEXN | $G_REGEX; // No u-flag
 const $REGEXU = $L_REGEXU | $G_REGEX; // With u-flag ("strict mode" for regular expressions)
+const $REGEXV = $L_REGEXV | $G_REGEX; // ES2024: With v-flag (unicodeSets mode), mutually exclusive with u
 const $STRING_SINGLE = $L_STRING_SINGLE | $G_STRING;
 const $STRING_DOUBLE = $L_STRING_DOUBLE | $G_STRING;
 const $TICK_HEAD = $L_TICK_HEAD | $G_TICK;
@@ -1628,6 +1634,7 @@ function toktypeToString(type) {
     case $COMMENT_SINGLE: return 'COMMENT_SINGLE';
     case $COMMENT_MULTI: return 'COMMENT_MULTI';
     case $COMMENT_HTML: return 'COMMENT_HTML';
+    case $COMMENT_HASHBANG: return 'COMMENT_HASHBANG';
     case $IDENT: return 'IDENT';
     case $ID_arguments: return 'ID_arguments';
     case $ID_as: return 'ID_as';
@@ -1684,6 +1691,7 @@ function toktypeToString(type) {
     case $ID_while: return 'ID_while';
     case $ID_with: return 'ID_with';
     case $ID_yield: return 'ID_yield';
+    case $ID_PRIVATE_IDENT: return 'ID_PRIVATE_IDENT';
     case $NUMBER_HEX: return 'NUMBER_HEX';
     case $NUMBER_DEC: return 'NUMBER_DEC';
     case $NUMBER_BIN: return 'NUMBER_BIN';
@@ -1754,6 +1762,7 @@ function toktypeToString(type) {
     case $PUNC_TILDE: return 'PUNC_TILDE';
     case $REGEXN: return 'REGEXN';
     case $REGEXU: return 'REGEXU';
+    case $REGEXV: return 'REGEXV';
     case $STRING_SINGLE: return 'STRING_SINGLE';
     case $STRING_DOUBLE: return 'STRING_DOUBLE';
     case $TICK_HEAD: return 'TICK_HEAD';
@@ -1800,6 +1809,7 @@ ASSERT(ALL_TOKEN_TYPES = [
   $COMMENT_SINGLE,
   $COMMENT_MULTI,
   $COMMENT_HTML,
+  $COMMENT_HASHBANG,
   $IDENT,
   $ID_arguments,
   $ID_as,
@@ -1856,6 +1866,7 @@ ASSERT(ALL_TOKEN_TYPES = [
   $ID_while,
   $ID_with,
   $ID_yield,
+  $ID_PRIVATE_IDENT,
   $NUMBER_HEX,
   $NUMBER_DEC,
   $NUMBER_BIN,
@@ -1926,6 +1937,7 @@ ASSERT(ALL_TOKEN_TYPES = [
   $PUNC_TILDE,
   $REGEXN,
   $REGEXU,
+  $REGEXV,
   $STRING_SINGLE,
   $STRING_DOUBLE,
   $TICK_HEAD,
@@ -1942,7 +1954,7 @@ ASSERT(ALL_TOKEN_TYPES = [
 ]);
 // </SCRUB ASSERTS TO COMMENT>
 
-let MAX_START_VALUE = 26; // For quick check difference START or token type
+let MAX_START_VALUE = 27; // For quick check difference START or token type
 let __$flag_start = 0; // This name is hardcoded in the build script...
 const START_SPACE = __$flag_start++;
 const START_ID = __$flag_start++;
@@ -1969,6 +1981,7 @@ const START_GT = __$flag_start++;
 const START_OR = __$flag_start++;
 const START_BSLASH = __$flag_start++;
 const START_QMARK = __$flag_start++;
+const START_PRIVATE_IDENT = __$flag_start++; // # then IdentifierName (ES2022 private)
 const START_ERROR = __$flag_start++;
 // <SCRUB ASSERTS TO COMMENT>
 ASSERT(__$flag_start === MAX_START_VALUE, 'keep in sync (update if START symbols were added/removed)');
@@ -2096,7 +2109,7 @@ let tokenStartJumpTable = [
   START_SPACE,            // 0x20   yes   space
   START_EXCL,             // 0x21   no3   ! :: ! != !==
   START_STRING,           // 0x22   no*   "
-  START_ERROR,            // 0x23   yes   #
+  START_PRIVATE_IDENT,    // 0x23   no*   # :: #ident (private)
   START_ID,               // 0x24   no*   $
   START_PERCENT,          // 0x25   no2   % :: % %=
   START_AND,              // 0x26   no3   & :: & && &=
@@ -3113,7 +3126,7 @@ let stringEscapeStartJumpTable = [
 
 // <SCRUB ASSERTS TO COMMENT>
 let ALL_START_TYPES;
-ASSERT(ALL_START_TYPES = [START_SPACE, START_NL_SOLO, START_CR, START_EXCL, START_STRING, START_ZERO, START_DECIMAL, START_TEMPLATE, START_ID, START_KEY, START_PERCENT, START_AND, START_STAR, START_PLUS, START_MIN, START_DOT, START_DIV, START_CARET, START_LT, START_EQ, START_GT, START_BSLASH, START_OR, START_CURLY_CLOSE, START_QMARK, START_ERROR]);
+ASSERT(ALL_START_TYPES = [START_SPACE, START_NL_SOLO, START_CR, START_EXCL, START_STRING, START_ZERO, START_DECIMAL, START_TEMPLATE, START_ID, START_KEY, START_PERCENT, START_AND, START_STAR, START_PLUS, START_MIN, START_DOT, START_DIV, START_CARET, START_LT, START_EQ, START_GT, START_BSLASH, START_OR, START_CURLY_CLOSE, START_QMARK, START_PRIVATE_IDENT, START_ERROR]);
 // </SCRUB ASSERTS TO COMMENT>
 
 function getTokenStart(c) {
@@ -3218,6 +3231,7 @@ export {
   $COMMENT_SINGLE,
   $COMMENT_MULTI,
   $COMMENT_HTML,
+  $COMMENT_HASHBANG,
   $IDENT,
   $ID_arguments,
   $ID_as,
@@ -3274,6 +3288,7 @@ export {
   $ID_while,
   $ID_with,
   $ID_yield,
+  $ID_PRIVATE_IDENT,
   $NUMBER_HEX,
   $NUMBER_DEC,
   $NUMBER_BIN,
@@ -3344,6 +3359,7 @@ export {
   $PUNC_TILDE,
   $REGEXN,
   $REGEXU,
+  $REGEXV,
   $STRING_SINGLE,
   $STRING_DOUBLE,
   $TICK_HEAD,
@@ -3383,6 +3399,7 @@ export {
   START_OR,
   START_BSLASH,
   START_QMARK,
+  START_PRIVATE_IDENT,
   START_ERROR,
 
   STRING_PART,
