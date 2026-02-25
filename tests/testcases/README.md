@@ -31,7 +31,7 @@ If a file inside `tests/testcases/**` starts with `@` then the test runner assum
 
 The file will be split on `###`.
 - The first part (sans the leading `@`) is used as extra information, which will appear at the top of the generated test file.
-- It may contain `## PASS` or `## FAIL` if all modes should pass/fail the input. Currently no support if only some modes pass/fail.
+- It may contain `## PASS` or `## FAIL` if all modes should pass/fail the input. Use `## PASS MODULE` or `## PASS SLOPPY` if only that mode must pass. These markers are mutually exclusive.
 - The remaining part after the first `###` is entirely the test case.
 
 Both parts will be trimmed from trailing whitespace on every line.
@@ -58,11 +58,13 @@ Currently one hint the header may contain is whether to expect to pass or fail o
 
 ```
 ## PASS
+## PASS MODULE
+## PASS SLOPPY
 ## FAIL
 ## SKIP
 ```
 
-Files that are marked to be skipped will not run at all. Files that are marked to pass/fail, will throw an assertion error if that's not the case.
+Files that are marked to be skipped will not run at all. Files that are marked to pass/fail, will throw an assertion error if that's not the case. `PASS MODULE` and `PASS SLOPPY` assert that at least that mode must pass. These markers are mutually exclusive.
 
 ### Input
 
@@ -128,7 +130,7 @@ The format of each option is as follows:
 
 The options are specific to the testing framework, although I could see myself adding a more free form way of passing options down to the parser, later. The current style is still a little legacy from the old infra.
 
-The `es` option sets the target ECMAScript version for that test (e.g. `es = 10` for ES2019). Allowed values are 6–14 or 2015–2023. When running with `./t f <file>`, the CLI flag `--es14` (or a number like `14`) overrides the file’s `es` value.
+The `es` option sets the target ECMAScript version for that test (e.g. `es = 10` for ES2019). Allowed values are 6–16 or 2015–2025. When running with `./t f <file>`, the CLI flag `--es16` (or a number like `16`) overrides the file’s `es` value.
 
 ### Example
 

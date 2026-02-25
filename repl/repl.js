@@ -23,7 +23,8 @@ import {
   GOAL_MODULE,
   COLLECT_TOKENS_ALL,
   COLLECT_TOKENS_TYPES,
-  COLLECT_TOKENS_NONE
+  COLLECT_TOKENS_NONE,
+  toktypeToString,
 } from '../src/index.mjs';
 
 console.log('loaded...');
@@ -49,6 +50,50 @@ if (localStorage.getItem('Tenko.repl.options')) {
   }
 }
 
+
+/** Turn a scope object (with Map/Set etc.) into a plain object for JSON.stringify. */
+function scopeToJSONSafe(scope, seen = new WeakSet()) {
+  if (scope == null || typeof scope !== 'object') return scope;
+  if (seen.has(scope)) return { type: scope.type, _desc: scope._desc, _circular: true };
+  seen.add(scope);
+  const names =
+    scope.names instanceof Map
+      ? Object.fromEntries(scope.names)
+      : scope.names == null
+        ? null
+        : scope.names;
+  const out = {
+    type: scope.type,
+    _desc: scope._desc,
+    names,
+    dupeParamErrorStart: scope.dupeParamErrorStart,
+    dupeParamErrorStop: scope.dupeParamErrorStop,
+  };
+  if (scope.parent && scope.parent !== scope) {
+    out.parent = scopeToJSONSafe(scope.parent, seen);
+  }
+  return out;
+}
+
+/** Walk AST and replace $scope (and any other Map/Set-bearing refs) so JSON.stringify shows useful output. */
+function astToJSONSafe(value, scopeSeen = new WeakSet()) {
+  if (value == null) return value;
+  if (typeof value !== 'object') return value;
+  if (value.isScope === true) return scopeToJSONSafe(value, scopeSeen);
+  if (Array.isArray(value)) return value.map((v) => astToJSONSafe(v, scopeSeen));
+  if (value instanceof Map) return Object.fromEntries(value);
+  if (value instanceof Set) return [...value];
+  const out = {};
+  for (const key of Object.keys(value)) {
+    const v = value[key];
+    if (key === '$scope' && v != null && typeof v === 'object' && v.isScope === true) {
+      out[key] = scopeToJSONSafe(v, scopeSeen);
+    } else {
+      out[key] = astToJSONSafe(v, scopeSeen);
+    }
+  }
+  return out;
+}
 
 function pret(s, isjson) {
   // Note: this is prettier 0.4 or something... it's good enough for our purpose
@@ -137,8 +182,17 @@ const update = e => {
   reflectPass();
 
   // Note: shipping a very old version of Prettier. Not very important for the purpose of printing an AST.
-  window.ta_ast.value = pret(JSON.stringify(out.ast), true);
-  window.ta_output.value = out.tokens.map(t => ''+t).join('\n');
+  // Serialize AST with scope objects made JSON-safe (Map/Set → plain object/array) so $scope is readable.
+  window.ta_ast.value = pret(JSON.stringify(astToJSONSafe(out.ast)), true);
+  window.ta_output.value = out.tokens.map(t => {
+    const name = toktypeToString(t);
+    if (typeof t === 'object' && typeof t.start === 'number' && typeof t.stop === 'number') {
+      const slice = input.slice(t.start, t.stop);
+      const loc = (t.line != null && t.column != null) ? ` (${t.line + 1}:${t.column})` : '';
+      return name + loc + ' ' + JSON.stringify(slice);
+    }
+    return name;
+  }).join('\n');
   console.log(['out:', out, 'ast:', out.ast]);
 };
 
@@ -160,6 +214,9 @@ function scheduleOverall(input, currentMode, currentVersion) {
     $ver_es11.parentNode.className = 'mode_selector ' + silentPassFail(input, currentMode, 11);
     $ver_es12.parentNode.className = 'mode_selector ' + silentPassFail(input, currentMode, 12);
     $ver_es13.parentNode.className = 'mode_selector ' + silentPassFail(input, currentMode, 13);
+    $ver_es14.parentNode.className = 'mode_selector ' + silentPassFail(input, currentMode, 14);
+    $ver_es15.parentNode.className = 'mode_selector ' + silentPassFail(input, currentMode, 15);
+    $ver_es16.parentNode.className = 'mode_selector ' + silentPassFail(input, currentMode, 16);
   }, 100);
 }
 

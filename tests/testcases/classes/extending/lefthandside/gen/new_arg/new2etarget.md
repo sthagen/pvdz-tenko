@@ -33,7 +33,7 @@ throws: Parser error!
 start@1:0, error@1:4
 ╔══╦════════════════
  1 ║ new new.target
-   ║     ^^^^------- error
+   ║     ^^^^^^^^^^------- error
 ╚══╩════════════════
 
 `````

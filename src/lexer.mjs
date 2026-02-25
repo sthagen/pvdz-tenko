@@ -495,6 +495,14 @@ import {
   REGEX_INVALID_CURLY_QUANTIFIER,
   REGEX_PARTIAL_CURLY_QUANTIFIER,
 } from './enum_lexer.mjs';
+import {
+  VERSION_BIGINT,
+  VERSION_OPTIONAL_CHAINING,
+  VERSION_NULLISH_COALESCING,
+  VERSION_LOGICAL_ASSIGNMENT,
+  VERSION_REGEX_DUPLICATE_NAMED_GROUPS,
+  VERSION_WHATEVER,
+} from './enum_parser.mjs';
 
 let ID_START_REGEX = undefined;
 function getIdStartRegexSuperSlow() {
@@ -545,19 +553,21 @@ function Lexer(
   ASSERT(typeof input === 'string', 'input string should be string; ' + typeof input);
   ASSERT(targetEsVersion !== undefined, 'undefined should become default', targetEsVersion);
   ASSERT(typeof targetEsVersion === 'number', 'targetEsVersion should be a number', typeof targetEsVersion);
-  ASSERT((targetEsVersion >= 6 && targetEsVersion <= 15) || targetEsVersion === Infinity, 'only support v6~15 (ES2015-ES2024) right now [' + targetEsVersion + ','+(typeof targetEsVersion)+']');
+  ASSERT((targetEsVersion >= 6 && targetEsVersion <= 16) || targetEsVersion === Infinity, 'only support v6~16 (ES2015-ES2025) right now [' + targetEsVersion + ','+(typeof targetEsVersion)+']');
 
   const supportRegexPropertyEscapes = targetEsVersion >= 9 || targetEsVersion === Infinity;
   const supportRegexLookbehinds = targetEsVersion >= 9 || targetEsVersion === Infinity;
   const supportRegexDotallFlag = targetEsVersion >= 9 || targetEsVersion === Infinity;
   const supportRegexNamedGroups = targetEsVersion >= 9 || targetEsVersion === Infinity;
+  const supportRegexDuplicateNamedCaptureGroups = targetEsVersion >= VERSION_REGEX_DUPLICATE_NAMED_GROUPS || targetEsVersion === VERSION_WHATEVER; // ES2025: duplicate names allowed when they can't both participate (MightBothParticipate)
+  const supportRegexModifiers = targetEsVersion >= 16 || targetEsVersion === Infinity; // ES2025: (?ims:pattern) and (?ims-ms:pattern) inline flag modifiers
   const supportRegexIndices = targetEsVersion >= 13 || targetEsVersion === Infinity; // ES2022: hasIndices / d flag
   const supportRegexVFlag = targetEsVersion >= 15 || targetEsVersion === Infinity; // ES2024: unicodeSets mode (v flag), mutually exclusive with u
   const supportHashbang = targetEsVersion >= 14 || targetEsVersion === Infinity; // ES2023: HashbangComment
-  const supportBigInt = targetEsVersion === 11 || targetEsVersion === Infinity;
-  const supportNullishCoalescing = targetEsVersion === 11 || targetEsVersion === Infinity;
-  const supportOptionalChaining = targetEsVersion === 11 || targetEsVersion === Infinity;
-  const supportLogicCompound = targetEsVersion === 12 || targetEsVersion === Infinity;
+  const supportBigInt = targetEsVersion >= VERSION_BIGINT || targetEsVersion === VERSION_WHATEVER;
+  const supportNullishCoalescing = targetEsVersion >= VERSION_NULLISH_COALESCING || targetEsVersion === VERSION_WHATEVER;
+  const supportOptionalChaining = targetEsVersion >= VERSION_OPTIONAL_CHAINING || targetEsVersion === VERSION_WHATEVER;
+  const supportLogicCompound = targetEsVersion >= VERSION_LOGICAL_ASSIGNMENT || targetEsVersion === VERSION_WHATEVER;
 
   let pointer = 0;
   let len = input.length;
@@ -1270,13 +1280,21 @@ function Lexer(
     ASSERT(typeof a === 'number', 'first digit ord');
     ASSERT(typeof lexerFlags === 'number', 'lexerFlags number');
 
-    // \8 and \9 are never allowed in strings. Tagged templates the exception of course.
+    // \8 and \9 are never allowed in strings in strict mode. In _untagged_ templates they are never allowed (regardless of mode).
+    // Tagged templates are the exception: the parser may still accept the template but with bad escape.
+    // \8 and \9 are allowed as identity escape only in sloppy mode, and only in non-template strings.
     // > SingleStringCharacter -> `\` EscapeSequence -> CharacterEscapeSequence -> NonEscapeCharacter ->
     // >   SourceCharacter but not one of EscapeCharacter or LineTerminator -> (EscapeCharacter:) DecimalDigit -> 0123456789
-
     if (a === $$8_38 || a === $$9_39) {
-      if (!lastReportableLexerError) lastReportableLexerError = 'The grammar does not allow to escape the 8 or the 9 character';
-      return BAD_ESCAPE;
+      if (forTemplate || (lexerFlags & LF_STRICT_MODE) === LF_STRICT_MODE) {
+        if (!lastReportableLexerError) lastReportableLexerError = forTemplate
+          ? 'Illegal legacy octal escape in template, where octal escapes are never allowed'
+          : 'The grammar does not allow to escape the 8 or the 9 character';
+        return BAD_ESCAPE;
+      }
+      lastCanonizedInput += String.fromCharCode(a);
+      ++lastCanonizedInputLen;
+      return GOOD_ESCAPE;
     }
 
     if (eof()) return GOOD_ESCAPE; // Will error somewhere else
@@ -1418,7 +1436,7 @@ function Lexer(
           case $$OR_7C:
             if (neof() && peeky($$IS_3D)) {
               ASSERT_skip($$IS_3D);
-              if (supportLogicCompound) return $PUNC_AND_AND_EQ;
+              if (supportLogicCompound) return $PUNC_OR_OR_EQ;
               return THROW('The logical compound operator (`||=`) is only supported since ES2021, currently targeting a lower version', pointer - 3, pointer);
             }
             return $PUNC_OR_OR;
@@ -2648,6 +2666,10 @@ function Lexer(
   let lastPotentialRegexErrorForVFlag = ''; // message shown when v flag present and regexBodyHasSyntaxInvalidWithVFlag (fallback from lastPotentialRegexError in charclass consumer if unset)
   let regexBodyUsedVOnlySyntax = false; // --, &&, nested [], \q{}; error after flags if no v flag
   let regexBodyHasRgiEmoji = false; // \p{RGI_Emoji} is only valid with v flag; error after flags if u flag
+  let regexBranchPath = [0]; // ES2025: disjunction branch index at each nesting level (for MightBothParticipate duplicate named group check)
+  let regexGroupQuantified = []; // ES2025: regexGroupQuantified[depth] = true if the group at that depth has a repeating quantifier (* + {}), not ?
+  let regexNegativeAssertionDepth = 0; // ES2025 only (gated): > 0 when parsing inside (?! or (?<! (captures there can't participate; (?= and (?<= can)
+  let declaredGroupNamesWithPath = new Map(); // ES2025: name -> array of { path, inNegativeAssertion } (only when supportRegexDuplicateNamedCaptureGroups)
   function parseRegex(c) {
     nCapturingParens = 0;
     largestBackReference = 0;
@@ -2661,6 +2683,10 @@ function Lexer(
     regexBodyHasSyntaxInvalidWithVFlag = false;
     regexBodyUsedVOnlySyntax = false;
     regexBodyHasRgiEmoji = false;
+    regexBranchPath = [0];
+    regexGroupQuantified = [];
+    regexNegativeAssertionDepth = 0;
+    declaredGroupNamesWithPath = new Map();
 
     let ustatusBody = parseRegexBody(c);
     if (ustatusBody === REGEX_ALWAYS_BAD) {
@@ -2669,6 +2695,38 @@ function Lexer(
     }
 
     ASSERT(ustatusBody === REGEX_ALWAYS_GOOD || lastPotentialRegexError, 'last potential error should be set if there was a potential problem', lastReportableLexerError, lastPotentialRegexError);
+
+    // ES2025 MightBothParticipate: check every pair of same-named groups with final regexGroupQuantified (https://tc39.es/ecma262/#sec-mightbothparticipate)
+    if (supportRegexDuplicateNamedCaptureGroups) {
+      for (let [name, entries] of declaredGroupNamesWithPath) {
+        if (entries.length < 2) continue;
+        for (let j = 1; j < entries.length; j++) {
+          for (let i = 0; i < j; i++) {
+            let a = entries[i];
+            let b = entries[j];
+            // ES2025: one in negative assertion (?! or (?<!), one not: they can't both participate. Positive assertions (?=, (?<=) do participate; only negative exempt.
+            if (a.inNegativeAssertion !== b.inNegativeAssertion) continue;
+            let qa = a.path.map((_, idx) => !!regexGroupQuantified[idx]);
+            let qb = b.path.map((_, idx) => !!regexGroupQuantified[idx]);
+            let mightBoth = (pa, pb, qA, qB) => {
+              if ((pa.length <= pb.length && pa.every((v, i) => v === pb[i])) ||
+                  (pb.length <= pa.length && pb.every((v, i) => v === pa[i]))) return true;
+              let k = 0;
+              while (k < pa.length && k < pb.length && pa[k] === pb[k]) k++;
+              if (k >= pa.length || k >= pb.length) return true;
+              // Repeating quantifier at any level from k up to root allows both to participate (nested case).
+              for (let jj = k; jj >= 0; jj--) {
+                if (qA[jj] || qB[jj]) return true;
+              }
+              return false;
+            };
+            if (mightBoth(a.path, b.path, qa, qb)) {
+              THROW('This group name (`' + name + '`) was already used before', b.pointerStart, b.pointerEnd);
+            }
+          }
+        }
+      }
+    }
 
     // Don't parse the flag if a hard error was found because it's probably before the second `/`
     let ustatusFlags = parseRegexFlags();
@@ -2781,6 +2839,7 @@ function Lexer(
     //   - reflects on surrogate pairs, unicode ruby escapes, and valid char class ranges
 
     let afterAtom = false;
+    let lastCompletedGroupDepth = 0; // ES2025: depth of group that was the last completed atom (so next quantifier applies to it); 0 = none
 
     // dont start with a quantifier
     uflagStatus = cannotBeQuantifier(c, uflagStatus, c === $$CURLY_L_7B, 'Started with a quantifier but that is not allowed');
@@ -2794,18 +2853,26 @@ function Lexer(
         case REGEX_ATOM_OTHER:
           ASSERT_skip(c); // this ought to be a valid regex source character
           afterAtom = true;
+          lastCompletedGroupDepth = 0;
           break;
 
         case REGEX_ATOM_DOT:
           // atom; match one character
           ASSERT_skip($$DOT_2E);
           afterAtom = true;
+          lastCompletedGroupDepth = 0;
           break;
 
         case REGEX_ATOM_QUANT:
           // doesnt matter to us which quantifier we find here
           ASSERT_skip(c);
           if (afterAtom) {
+            // ES2025: only * and + are "repeating" (both can participate); ? is optional (at most one).
+            if (supportRegexDuplicateNamedCaptureGroups && lastCompletedGroupDepth > 0 && c !== $$QMARK_3F) {
+              while (regexGroupQuantified.length <= lastCompletedGroupDepth) regexGroupQuantified.push(false);
+              regexGroupQuantified[lastCompletedGroupDepth] = true;
+            }
+            lastCompletedGroupDepth = 0;
             afterAtom = false;
             if (neof()) {
               if (peeky($$QMARK_3F)) {
@@ -2823,6 +2890,7 @@ function Lexer(
           let wasFixableAssertion = false;
           // lookbehind `(?<=` and `(?<!` can not get quantified even under webcompat flag (too new)
           let wasUnfixableAssertion = false;
+          let wasNegativeAssertion = false; // (?! or (?<! — capture can't participate with main; (?= and (?<= can
 
           // parse group (?: (!: (
           ASSERT_skip($$PAREN_L_28);
@@ -2857,6 +2925,7 @@ function Lexer(
                   // (?<= (?<!
                   ASSERT_skip(c);
                   wasUnfixableAssertion = true;
+                  wasNegativeAssertion = (c === $$EXCL_21);
                 }
                 else if (!supportRegexNamedGroups) {
                   ASSERT_skip(c);
@@ -2879,12 +2948,29 @@ function Lexer(
                 // (?= (?!
                 ASSERT_skip(c);
                 wasFixableAssertion = true; // lookahead assertion might only be quantified without u-flag and in webcompat mode
+                wasNegativeAssertion = (c === $$EXCL_21);
               }
 
               if (eof()) {
                 return regexSyntaxError('Encountered early EOF');
               }
               c = peek();
+            } else if (supportRegexModifiers && (c === $$I_69 || c === $$M_6D || c === $$S_73 || c === $$DASH_2D)) {
+              // ES2025: (?ims:...) or (?ims-ms:...)
+              if (parseRegexModifierFlags() === REGEX_ALWAYS_BAD) return REGEX_ALWAYS_BAD;
+              if (eof()) return regexSyntaxError('Encountered early EOF');
+              c = peek();
+              let subbad = _parseRegexBody(c, groupLevel + 1, REGEX_ALWAYS_GOOD);
+              if (supportRegexDuplicateNamedCaptureGroups) lastCompletedGroupDepth = groupLevel + 1;
+              afterAtom = true;
+              if (subbad === REGEX_ALWAYS_BAD) {
+                uflagStatus = REGEX_ALWAYS_BAD;
+              } else if (subbad === REGEX_GOOD_SANS_UV_FLAG) {
+                uflagStatus = updateRegexUflagIsIllegal(uflagStatus, lastPotentialRegexError);
+              } else if (subbad === REGEX_GOOD_WITH_U_FLAG) {
+                uflagStatus = updateRegexUflagIsMandatory(uflagStatus, lastPotentialRegexError);
+              }
+              break;
             } else {
               return regexSyntaxError('Illegal character after pseudo group marker `(?` [ord=' + c + ']');
             }
@@ -2893,7 +2979,11 @@ function Lexer(
             ++nCapturingParens;
           }
 
+          if (supportRegexDuplicateNamedCaptureGroups) regexBranchPath.push(0);
+          if (supportRegexDuplicateNamedCaptureGroups && wasNegativeAssertion) regexNegativeAssertionDepth++;
           let subbad = _parseRegexBody(c, groupLevel + 1, REGEX_ALWAYS_GOOD);
+          if (supportRegexDuplicateNamedCaptureGroups && wasNegativeAssertion) regexNegativeAssertionDepth--;
+          if (supportRegexDuplicateNamedCaptureGroups) regexBranchPath.pop();
 
           if (eof()) {
             return regexSyntaxError('Encountered early EOF');
@@ -2907,6 +2997,7 @@ function Lexer(
           }
 
           afterAtom = true;
+          if (supportRegexDuplicateNamedCaptureGroups) lastCompletedGroupDepth = groupLevel + 1;
           if (subbad === REGEX_ALWAYS_BAD) {
             uflagStatus = REGEX_ALWAYS_BAD; // should already have THROWn for this
           } else if (subbad === REGEX_GOOD_SANS_UV_FLAG) {
@@ -2934,6 +3025,7 @@ function Lexer(
             uflagStatus = updateRegexUflagIsMandatory(uflagStatus, lastPotentialRegexError);
           }
           afterAtom = true;
+          lastCompletedGroupDepth = 0;
           break;
 
         case REGEX_ATOM_SQUARER: {
@@ -2944,6 +3036,7 @@ function Lexer(
           }
           uflagStatus = updateRegexUflagIsIllegal(uflagStatus, reason);
           afterAtom = true;
+          lastCompletedGroupDepth = 0;
           break;
         }
 
@@ -2951,6 +3044,7 @@ function Lexer(
           // atom escape is different from charclass escape
           ASSERT_skip($$BACKSLASH_5C);
           afterAtom = true; // except in certain cases...
+          lastCompletedGroupDepth = 0;
 
           if (eof()) {
             return regexSyntaxError('Early EOF');
@@ -3019,6 +3113,7 @@ function Lexer(
           // atom; match one character. Beyond 2028 2029, atoms with non-ascii chars are not special
           ASSERT_skip(c); // this ought to be a valid regex source character, even if just half a surrogate pair
           afterAtom = true;
+          lastCompletedGroupDepth = 0;
           break;
 
         case REGEX_ATOM_CURLYL: {
@@ -3047,6 +3142,11 @@ function Lexer(
               //    ^^^^^
               // `/a{12,13}/`
               //    ^^^^^^^
+              if (supportRegexDuplicateNamedCaptureGroups && lastCompletedGroupDepth > 0) {
+                while (regexGroupQuantified.length <= lastCompletedGroupDepth) regexGroupQuantified.push(false);
+                regexGroupQuantified[lastCompletedGroupDepth] = true;
+              }
+              lastCompletedGroupDepth = 0;
               afterAtom = false;
 
               if (neof() && peeky($$QMARK_3F)) {
@@ -3110,6 +3210,7 @@ function Lexer(
           // [v]: `/{?/u`
 
           afterAtom = true;
+          lastCompletedGroupDepth = 0;
           uflagStatus = updateRegexUflagIsIllegal(uflagStatus, 'Found an unescaped `{` that was not the start of a valid quantifier');
           break;
         }
@@ -3124,12 +3225,14 @@ function Lexer(
           uflagStatus = updateRegexUflagIsIllegal(uflagStatus, reason);
           // in web compat mode this case is treated as an extended atom
           afterAtom = true;
+          lastCompletedGroupDepth = 0;
           break;
         }
 
         case REGEX_ATOM_OR:
           // left and/or right side of the pipe can be empty. weird but syntactically valid
           ASSERT_skip($$OR_7C);
+          if (supportRegexDuplicateNamedCaptureGroups && regexBranchPath.length > 0) regexBranchPath[regexBranchPath.length - 1]++;
           afterAtom = false;
           break;
 
@@ -3255,7 +3358,17 @@ function Lexer(
       // This enables +N mode, meaning `\k` is now disallowed in char classes in webcompat mode too
       let next = lastCanonizedInput + ',';
       if (forCapturing === FOR_NAMED_GROUP) {
-        if (declaredGroupNames.includes(',' + next)) {
+        if (supportRegexDuplicateNamedCaptureGroups) {
+          // ES2025: collect (path, position, inAssertion); MightBothParticipate check is deferred until after body parse (so we see quantifiers).
+          let path = regexBranchPath.slice();
+          let entry = { path, pointerStart, pointerEnd: pointer - 1, inNegativeAssertion: regexNegativeAssertionDepth > 0 };
+          let entries = declaredGroupNamesWithPath.get(lastCanonizedInput);
+          if (!entries) {
+            entries = [];
+            declaredGroupNamesWithPath.set(lastCanonizedInput, entries);
+          }
+          entries.push(entry);
+        } else if (declaredGroupNames.includes(',' + next)) {
           // [x]: `/(?<a>a)(?<b>b)(?<a>a)/`
           THROW('This group name (`' + lastCanonizedInput + '`) was already used before', pointerStart, pointer - 1);
         }
@@ -4197,19 +4310,19 @@ function Lexer(
           ASSERT(c !== INVALID_IDENT_CHAR, 'I dont think this status flag can reach this point');
 
           if (c & REGEX_CHARCLASS_BAD_WITH_U_FLAG) {
-            c = c ^ REGEX_CHARCLASS_BAD_WITH_U_FLAG; // remove the CHARCLASS_BAD_WITH_U_FLAG flag (dont use ^= because that deopts... atm; https://stackoverflow.com/questions/34595356/what-does-compound-let-const-assignment-mean )
+            c = c & ~REGEX_CHARCLASS_BAD_WITH_U_FLAG; // remove the CHARCLASS_BAD_WITH_U_FLAG flag (dont use ^= because that deopts... atm; https://stackoverflow.com/questions/34595356/what-does-compound-let-const-assignment-mean )
             ASSERT(lastPotentialRegexError, 'error should be set');
             flagState = updateRegexUflagIsIllegal(flagState, lastPotentialRegexError);
             ASSERT(flagState === REGEX_GOOD_SANS_UV_FLAG || flagState === REGEX_ALWAYS_BAD, 'either way, the flag state should now reflect "bad with u-flag", or worse');
           }
           if (c & REGEX_CHARCLASS_BAD_WITH_V_FLAG) {
-            c = c ^ REGEX_CHARCLASS_BAD_WITH_V_FLAG;
+            c = c & ~REGEX_CHARCLASS_BAD_WITH_V_FLAG;
             regexBodyHasSyntaxInvalidWithVFlag = true;
             // Use same message as u-flag path when source didn't set a v-specific one (e.g. identity escape sets both at source)
             if (!lastPotentialRegexErrorForVFlag && lastPotentialRegexError) lastPotentialRegexErrorForVFlag = lastPotentialRegexError;
           }
           if (c & REGEX_CHARCLASS_BAD_SANS_U_FLAG) {
-            c = c ^ REGEX_CHARCLASS_BAD_SANS_U_FLAG; // remove the REGEX_CHARCLASS_BAD_SANS_U_FLAG flag (dont use ^= because that deopts... atm; https://stackoverflow.com/questions/34595356/what-does-compound-let-const-assignment-mean )
+            c = c & ~REGEX_CHARCLASS_BAD_SANS_U_FLAG; // remove the REGEX_CHARCLASS_BAD_SANS_U_FLAG flag (dont use ^= because that deopts... atm; https://stackoverflow.com/questions/34595356/what-does-compound-let-const-assignment-mean )
             ASSERT(lastPotentialRegexError, 'error should be set');
             flagState = updateRegexUflagIsMandatory(flagState, lastPotentialRegexError);
             ASSERT(flagState === REGEX_GOOD_WITH_U_FLAG || flagState === REGEX_ALWAYS_BAD, 'either way, the flag state should now reflect "bad with u-flag", or worse');
@@ -5162,6 +5275,49 @@ function Lexer(
       }
 
       return updateRegexUflagIsMandatory(REGEX_ALWAYS_GOOD, 'The `\\p` property escape is only legal with a u-flag or v-flag, or as a webcompat edge case');
+  }
+  function parseRegexModifierFlags() {
+    // ES2025: (?ims:...) or (?ims-ms:...). Only i, m, s allowed. No duplicate in a set; add and remove must be disjoint.
+    const I = 1, M = 2, S = 4;
+    let addMask = 0;
+    let removeMask = 0;
+    let hadMinus = false;
+    while (neof()) {
+      let c = peek();
+      if (c === $$I_69 || c === $$M_6D || c === $$S_73) {
+        let bit = c === $$I_69 ? I : c === $$M_6D ? M : S;
+        if (addMask & bit) return regexSyntaxError('Duplicate modifier flag `' + String.fromCharCode(c) + '`');
+        addMask |= bit;
+        ASSERT_skip(c);
+      } else if (c === $$DASH_2D) {
+        hadMinus = true;
+        ASSERT_skip($$DASH_2D);
+        break;
+      } else if (c === $$COLON_3A) {
+        break;
+      } else {
+        return regexSyntaxError('Invalid modifier flag (only i, m, s allowed) [ord=' + c + ', `' + String.fromCharCode(c) + '`]');
+      }
+    }
+    if (hadMinus) {
+      while (neof()) {
+        let c = peek();
+        if (c === $$I_69 || c === $$M_6D || c === $$S_73) {
+          let bit = c === $$I_69 ? I : c === $$M_6D ? M : S;
+          if (removeMask & bit) return regexSyntaxError('Duplicate modifier flag in remove set `' + String.fromCharCode(c) + '`');
+          if (addMask & bit) return regexSyntaxError('Modifier group: flag cannot appear in both add and remove set');
+          removeMask |= bit;
+          ASSERT_skip(c);
+        } else if (c === $$COLON_3A) {
+          break;
+        } else {
+          return regexSyntaxError('Invalid modifier flag in remove set (only i, m, s allowed) [ord=' + c + ']');
+        }
+      }
+      if (removeMask === 0) return regexSyntaxError('Modifier group: second flag set cannot be empty after `-`');
+    }
+    if (eof() || peek() !== $$COLON_3A) return regexSyntaxError('Modifier group: expected `:` after modifier flags');
+    ASSERT_skip($$COLON_3A);
   }
   function parseRegexFlags() {
     // Valid flags: g, i, m, u, y, s (es9), d (es2022), v (es2024). In unicode mode each flag may only occur once.
