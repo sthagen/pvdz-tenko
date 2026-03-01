@@ -99,9 +99,13 @@ const TEST_BABEL = COMPARE_BABEL && (!AUTO_UPDATE || CONFIRMED_UPDATE); // ignor
 const NO_FATALS = process.argv.includes('--no-fatals'); // asserts should not stop a full auto run (dev tool, rely on git etc for recovery...)
 const CONCISE = process.argv.includes('--concise');
 const QUIET_FILE = process.argv.includes('--quiet'); // With -f: only print PASS/FAIL line
+const SUMMARY_ONLY = process.argv.includes('--summary-only'); // Only print summary + up to 5 failures
 const USE_BUILD = process.argv.includes('-b') || process.argv.includes('--build');
 const SKIP_PRINTER = process.argv.includes('--no-printer'); // || USE_BUILD;
 const EXPOSE_SCOPE = process.argv.includes('--expose-scope');
+const CHUNK_ARG = process.argv.includes('--chunk') ? process.argv[process.argv.indexOf('--chunk') + 1] : '';
+const CHUNK_INDEX = CHUNK_ARG ? parseInt(CHUNK_ARG.split('/')[0], 10) : -1;
+const CHUNK_TOTAL = CHUNK_ARG ? parseInt(CHUNK_ARG.split('/')[1], 10) : -1;
 
 const TENKO_DEV_FILE = '../src/index.mjs';
 const TENKO_PROD_FILE = '../build/tenko.prod.mjs';
@@ -159,6 +163,7 @@ if (process.argv.includes('-?') || process.argv.includes('--help')) {
     --no-fatals   Do not treat (test) assertion errors as fatals (dev tools only, rely on git etc for recovery)
     --concise     Do not dump AST and printer output to stdout. Parse and stop. Only works with -i or -f or -F
     --quiet       With -f: only print the PASS/FAIL line (auto implied for ./t ff)
+    --chunk I/N   Only process every Nth file starting at index I (0-based). Used by \`./t up\` for parallel runs.
     --expose-scope Add generated scope objects as \`.$scope\` property for nodes that generate a scope. Good luck that that that...
 `);
   process.exit();
@@ -253,6 +258,8 @@ function coreTest(tob, tenko, testVariant, annexB, enableCodeFrame = false, code
   hitsToReport = wasHits;
   let r, e = '';
   let stdout = [];
+  ASSERT(typeof WEB_COMPAT_ON === 'boolean' && typeof WEB_COMPAT_OFF === 'boolean', 'should be loaded and bools');
+  const webcompatMode = ENABLE_ANNEXB || annexB ? WEB_COMPAT_ON : WEB_COMPAT_OFF;
   try {
     if (verbose) {
       console.time('Pure Tenko parse time');
@@ -264,7 +271,7 @@ function coreTest(tob, tenko, testVariant, annexB, enableCodeFrame = false, code
         goalMode: testVariant === TEST_MODULE ? GOAL_MODULE : GOAL_SCRIPT,
         collectTokens: COLLECT_TOKENS_SOLID,
         strictMode: testVariant === TEST_STRICT,
-        webCompat: ENABLE_ANNEXB || annexB ? WEB_COMPAT_ON : WEB_COMPAT_OFF,
+        webCompat: webcompatMode,
         targetEsVersion: FORCED_ES_TARGET || tob.inputOptions.es,
         babelCompat: BABEL_COMPAT,
         acornCompat: ACORN_COMPAT,
@@ -290,7 +297,13 @@ function coreTest(tob, tenko, testVariant, annexB, enableCodeFrame = false, code
       if (CONCISE) return;
     }
     if (tob.shouldFail) {
-      tob.continuePrint = BLINK + 'FILE ASSERTED TO FAIL' + RESET + ', but it passed';
+      tob.continuePrint = BLINK + 'FILE ASSERTED TO FAIL' + RESET + ', but it passed (goal=' + (testVariant === TEST_MODULE ? 'module':'sloppy') + ',annexb=' + (webcompatMode === WEB_COMPAT_ON ? 'on':'off')+')';
+    } else if (tob.shouldPassModule && testVariant !== TEST_MODULE) {
+      tob.continuePrint = BLINK + 'FILE ASSERTED TO FAIL AS SLOPPY' + RESET + ', but it passed (goal=' + (testVariant === TEST_MODULE ? 'module':'sloppy') + ',annexb=' + (webcompatMode === WEB_COMPAT_ON ? 'on':'off')+')';
+    } else if (tob.shouldPassSloppy && testVariant !== TEST_SLOPPY && webcompatMode !== WEB_COMPAT_OFF) {
+      tob.continuePrint = BLINK + 'FILE ASSERTED TO FAIL AS MODULE' + RESET + ', but it passed (goal=' + (testVariant === TEST_MODULE ? 'module':'sloppy') + ',annexb=' + (webcompatMode === WEB_COMPAT_ON ? 'on':'off')+')';
+    } else if (tob.shouldPassAnnexb && testVariant !== TEST_SLOPPY && webcompatMode !== WEB_COMPAT_ON) {
+      tob.continuePrint = BLINK + 'FILE ASSERTED TO FAIL WITH SLOPPY ANNEXB' + RESET + ', but it passed (goal=' + (testVariant === TEST_MODULE ? 'module':'sloppy') + ',annexb=' + (webcompatMode === WEB_COMPAT_ON ? 'on':'off')+')';
     }
 
     // Test the ast printer
@@ -370,18 +383,20 @@ function coreTest(tob, tenko, testVariant, annexB, enableCodeFrame = false, code
     }
     e = _e;
     if (tob.shouldPassAny) {
-      tob.continuePrint = BLINK + 'FILE ASSERTED TO PASS' + RESET + ', but it failed';
+      tob.continuePrint = BLINK + 'FILE ASSERTED TO PASS' + RESET + ', but it failed (goal=' + (testVariant === TEST_MODULE ? 'module':'sloppy') + ',annexb=' + (webcompatMode === WEB_COMPAT_ON ? 'on':'off')+')';
     } else if (tob.shouldPassModule && testVariant === TEST_MODULE) {
-      tob.continuePrint = BLINK + 'FILE ASSERTED TO PASS (at least in module)' + RESET + ', but module failed';
-    } else if (tob.shouldPassSloppy && testVariant === TEST_SLOPPY) {
-      tob.continuePrint = BLINK + 'FILE ASSERTED TO PASS (at least in sloppy)' + RESET + ', but sloppy failed';
+      tob.continuePrint = BLINK + 'FILE ASSERTED TO PASS (at least in module)' + RESET + ', but module failed (goal=' + (testVariant === TEST_MODULE ? 'module':'sloppy') + ',annexb=' + (webcompatMode === WEB_COMPAT_ON ? 'on':'off')+')';
+    } else if (tob.shouldPassSloppy && testVariant === TEST_SLOPPY && webcompatMode === WEB_COMPAT_OFF) {
+      tob.continuePrint = BLINK + 'FILE ASSERTED TO PASS (at least in sloppy)' + RESET + ', but sloppy failed (goal=' + (testVariant === TEST_MODULE ? 'module':'sloppy') + ',annexb=' + (webcompatMode === WEB_COMPAT_ON ? 'on':'off')+')';
+    } else if (tob.shouldPassAnnexb && testVariant === TEST_SLOPPY && webcompatMode === WEB_COMPAT_ON) {
+      tob.continuePrint = BLINK + 'FILE ASSERTED TO PASS (at least with annexb)' + RESET + ', but annexb failed (goal=' + (testVariant === TEST_MODULE ? 'module':'sloppy') + ',annexb=' + (webcompatMode === WEB_COMPAT_ON ? 'on':'off')+')';
     }
   }
 
   if (tob.continuePrint) {
     if (!NO_FATALS && AUTO_UPDATE && tob.continuePrint && !CONFIRMED_UPDATE && !INPUT_OVERRIDE && !TARGET_FILE) {
       console.error(BOLD + 'Test Assertion fail' + RESET + ': testVariant=' + testVariant + ', annexB=' + annexB + ', test ' + BOLD + tob.fileShort + RESET + ' was explicitly marked to pass, but it failed somehow;\n' + RED + tob.continuePrint + RESET);
-      process.exit();
+      process.exit(1);
     } else if (verbose) {
       console.error(tob.continuePrint);
     }
@@ -951,30 +966,55 @@ async function main(tenko) {
   if (!QUIET_FILE) console.log('Filtered', beforeLen - list.length,'skipped tests (containing `## skip`)');
 
   if (RUN_VERBOSE_IN_SERIAL) {
+    let passCount = 0;
+    let failCount = 0;
+    let skipCount = 0;
+    let failedFiles = [];
     for (let i=0; i<list.length && !stopAsap; ++i) {
       let tob = list[i];
       await runAndRegenerateList([tob], tenko);
       let count = String(i+1).padStart(String(list.length).length, ' ') + ' / ' + list.length;
       if (tob.compareHadMatchFailure && !tob.compareWhiteListed) {
         unxepctedFails.push(tob.fileShort);
-        console.log(BOLD + RED + 'BAD!' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET + ' (file not whitelisted to fail but it failed anyways, investigate)');
+        ++failCount;
+        failedFiles.push(tob.fileShort);
+        if (!SUMMARY_ONLY) console.log(BOLD + RED + 'BAD!' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET + ' (file not whitelisted to fail but it failed anyways, investigate)');
       } else if (tob.compareHadMatchFailure) {
         ASSERT(tob.compareWhiteListed, 'then it is whitelisted');
         skippedOtherParserList.push(tob.fileShort);
-        console.log(BOLD + GREEN + 'SKIP' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET + ' (file whitelisted to fail and it failed)');
+        ++skipCount;
+        if (!SUMMARY_ONLY) console.log(BOLD + GREEN + 'SKIP' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET + ' (file whitelisted to fail and it failed)');
       } else if (tob.compareWhiteListed) {
         ASSERT(!tob.compareHadMatchFailure, 'then it is whitelisted but did not fail');
         unexpectedPass.push(tob.fileShort);
-        console.log(BOLD + RED + 'DROP' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET + ' (file whitelisted to fail but did not fail, remove from list)');
+        ++failCount;
+        failedFiles.push(tob.fileShort);
+        if (!SUMMARY_ONLY) console.log(BOLD + RED + 'DROP' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET + ' (file whitelisted to fail but did not fail, remove from list)');
       } else if (tob.compareSkippedExplicitVersion) {
         skippedOtherParserList.push(tob.fileShort);
-        console.log(BOLD + GREEN + 'SKIP' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET + ' (file skipped because it targets a specific ES version and we dont care about those cases here)');
+        ++skipCount;
+        if (!SUMMARY_ONLY) console.log(BOLD + GREEN + 'SKIP' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET + ' (file skipped because it targets a specific ES version and we dont care about those cases here)');
       } else if (tob.continuePrint) {
-        console.log(BOLD + RED + 'FAIL' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET + ' (' + tob.continuePrint + ')');
+        ++failCount;
+        failedFiles.push(tob.fileShort);
+        if (!SUMMARY_ONLY) console.log(BOLD + RED + 'FAIL' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET + ' (' + tob.continuePrint + ')');
       } else {
-        console.log(BOLD + GREEN + 'PASS' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET);
+        ++passCount;
+        if (!SUMMARY_ONLY) console.log(BOLD + GREEN + 'PASS' + RESET + ' ' + count + ' ' + DIM + tob.fileShort + RESET);
       }
     }
+    // Always print summary
+    let summaryParts = [];
+    if (passCount) summaryParts.push(GREEN + passCount + ' passed' + RESET);
+    if (failCount) summaryParts.push(RED + failCount + ' failed' + RESET);
+    if (skipCount) summaryParts.push(DIM + skipCount + ' skipped' + RESET);
+    let summaryLine = BOLD + 'Summary:' + RESET + ' ' + summaryParts.join(', ') + ' (' + list.length + ' total)';
+    if (failedFiles.length) {
+      let shown = failedFiles.slice(0, 5).join(' ');
+      summaryLine += '; failures: ' + shown;
+      if (failedFiles.length > 5) summaryLine += ' (and ' + (failedFiles.length - 5) + ' more)';
+    }
+    console.log(summaryLine);
     if (!QUIET_FILE) {
       if (skippedOtherParserList.length) {
         console.log(BOLD + 'Properly ignored these files:' + RESET);
@@ -1289,6 +1329,10 @@ if (INPUT_OVERRIDE) {
   if (!RUN_VERBOSE_IN_SERIAL) console.time('$$ Test search discovery time');
   getTestFiles(path.join(dirname, 'testcases'), '', files, true);
   if (!RUN_VERBOSE_IN_SERIAL) console.timeEnd('$$ Test search discovery time');
+  if (CHUNK_INDEX >= 0) {
+    files = files.filter((_, i) => i % CHUNK_TOTAL === CHUNK_INDEX);
+    if (!QUIET_FILE) console.log('Chunk', CHUNK_INDEX + '/' + CHUNK_TOTAL + ':', files.length, 'files');
+  }
   if (!QUIET_FILE) console.log('Read all test files, gathered', files.length, 'files');
 }
 
