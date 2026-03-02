@@ -285,6 +285,7 @@ function coreTest(tob, tenko, testVariant, annexB, enableCodeFrame = false, code
         errorCodeFrame: enableCodeFrame,
         truncCodeFrame: true,
         alwaysAllowOctalEscapes: tob.inputOptions.alwaysAllowOctalEscapes || false,
+        allowUsingDeclaration: tob.inputOptions.allowUsingDeclaration || false,
 
         $log: verbose ? undefined : (...a) => stdout.push(a),
         $warn: verbose ? undefined : (...a) => stdout.push(a),
@@ -311,6 +312,7 @@ function coreTest(tob, tenko, testVariant, annexB, enableCodeFrame = false, code
     if (!SKIP_PRINTER && !tob.printerOutput) {
       const printerParseOptions = {};
       if (tob.inputOptions.alwaysAllowOctalEscapes) printerParseOptions.alwaysAllowOctalEscapes = true;
+      if (tob.inputOptions.allowUsingDeclaration) printerParseOptions.allowUsingDeclaration = true;
       const esVersion = FORCED_ES_TARGET ?? tob.inputOptions.es;
       if (esVersion !== undefined && esVersion !== null) printerParseOptions.targetEsVersion = esVersion;
       tob.printerOutput = testPrinter(
@@ -390,6 +392,10 @@ function coreTest(tob, tenko, testVariant, annexB, enableCodeFrame = false, code
       tob.continuePrint = BLINK + 'FILE ASSERTED TO PASS (at least in sloppy)' + RESET + ', but sloppy failed (goal=' + (testVariant === TEST_MODULE ? 'module':'sloppy') + ',annexb=' + (webcompatMode === WEB_COMPAT_ON ? 'on':'off')+')';
     } else if (tob.shouldPassAnnexb && testVariant === TEST_SLOPPY && webcompatMode === WEB_COMPAT_ON) {
       tob.continuePrint = BLINK + 'FILE ASSERTED TO PASS (at least with annexb)' + RESET + ', but annexb failed (goal=' + (testVariant === TEST_MODULE ? 'module':'sloppy') + ',annexb=' + (webcompatMode === WEB_COMPAT_ON ? 'on':'off')+')';
+    } else if (tob.shouldPassAnnexboth && testVariant === TEST_SLOPPY && webcompatMode === WEB_COMPAT_ON) {
+      // PASS ANNEXBOTH: sloppy+annexb must pass (like PASS ANNEXB), but other modes passing is fine
+      // (e.g. strict/module block functions are lex-scoped and never conflict with outer-scope bindings)
+      tob.continuePrint = BLINK + 'FILE ASSERTED TO PASS (at least with annexb/both)' + RESET + ', but annexb failed (goal=' + (testVariant === TEST_MODULE ? 'module':'sloppy') + ',annexb=' + (webcompatMode === WEB_COMPAT_ON ? 'on':'off')+')';
     }
   }
 
@@ -925,6 +931,10 @@ async function cli(tenko) {
     }
     if (tob.printerOutput) console.log(tob.printerOutput[1]);
   }
+
+  console.log(BOLD + '\nProtip: If you are testing this input during development, create a test case for it!' + RESET);
+  console.log('If it is worth testing now, it is worth covering permanently -- you are likely hitting an edge case.\n');
+  console.log('  t new --file <path> --pragma <PASS|FAIL|...> --input <code> [--desc <desc>] [--opt key=value]\n');
 }
 
 async function main(tenko) {
@@ -1012,7 +1022,7 @@ async function main(tenko) {
     if (failedFiles.length) {
       let shown = failedFiles.slice(0, 5).join(' ');
       summaryLine += '; failures: ' + shown;
-      if (failedFiles.length > 5) summaryLine += ' (and ' + (failedFiles.length - 5) + ' more)';
+      if (failedFiles.length > 5) summaryLine += ' (and ' + (failedFiles.length - 5) + ' more, run ./t ff to see them all)';
     }
     console.log(summaryLine);
     if (!QUIET_FILE) {

@@ -18,7 +18,7 @@
   - Printer and walker support `StaticBlock`. Scope of a static block correctly chains to the enclosing scope (for class declarations), so `var` in a static block is attributed to the enclosing function/script and duplicate var/lex checks apply as for a normal block.
 - Support ES2023 (version 14): Hashbang (`#!` at start of script/module) is allowed when `targetEsVersion` is 14 or higher.
 - Support ES2024 (version 15): RegExp `v` flag (unicode sets mode) is allowed when `targetEsVersion` is 15 or higher.
-- Support ES2025 (version 16): Explicit Resource Management — `using` and `await using` declarations in blocks, `for`-in/`for`-of, catch, class static blocks; export; gated by `targetEsVersion` 16 (or 2025). ESTree: `VariableDeclaration` with `kind: 'using'` or `'await using'`.
+- Explicit Resource Management — `using` and `await using` declarations in blocks, `for`-of, catch, class static blocks. Gated by explicit `allowUsingDeclaration` option (not yet stage 4). ESTree: `VariableDeclaration` with `kind: 'using'` or `'await using'`.
 - Support ES2025 (version 16): Duplicate named capture groups in regexes when they cannot both participate (MightBothParticipate).
   - Gated by dedicated `VERSION_REGEX_DUPLICATE_NAMED_GROUPS` (16); duplicate names allowed when one capture is inside a lookahead/lookbehind (assertion) or when the disjunction is under `?`; rejected when a repeating quantifier (`*`, `+`, `{}`) allows both to participate (e.g. nested `(?:...|...)*`).
 - Support ES2025 (version 16): RegExp inline flag modifiers `(?ims:pattern)` and `(?ims-ms:pattern)`. Gated by `targetEsVersion` 16 (or 2025).
@@ -47,6 +47,9 @@
 - Fixed a bug in `a[{...()=>{}}.m()]` which was rejected because it would not parse a tail after the bracket in this particular case.
 - Fixed a bug in `--{_:()=>null}._` which was rejected because tail parsing was receiving the wrong set of parameters for the update.
 - Fixes a bug in `let instanceof x` where the code was checking `in` twice, where it should check `in` and `instanceof` instead.
+- Fixed an edge case in annexB / webcompat handling of function statement names.
+- Fixed an issue where generator / async function names were treated as var rather than lex.
+- Add script to generate and run a new test case
 
 ## v2.0.1
 

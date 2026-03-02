@@ -6,11 +6,13 @@
 >
 > ::> for await script fail
 >
-> Script goal: for await is only valid in async context
+> Script goal: for await using is only valid in async context or at module top level (top-level await)
 
-## FAIL
+## PASS MODULE
 
 ## Input
+
+- `allowUsingDeclaration = true`
 
 `````js
 for await (using x of it) {}
@@ -50,7 +52,50 @@ _Output same as sloppy mode._
 
 Parsed with the module goal.
 
-_Output same as sloppy mode._
+`````
+ast: {
+  type: 'Program',
+  loc:{start:{line:1,column:0},end:{line:1,column:28},source:''},
+  body: [
+    {
+      type: 'ForOfStatement',
+      loc:{start:{line:1,column:0},end:{line:1,column:28},source:''},
+      left: {
+        type: 'VariableDeclaration',
+        loc:{start:{line:1,column:11},end:{line:1,column:18},source:''},
+        kind: 'using',
+        declarations: [
+          {
+            type: 'VariableDeclarator',
+            loc:{start:{line:1,column:17},end:{line:1,column:18},source:''},
+            id: {
+              type: 'Identifier',
+              loc:{start:{line:1,column:17},end:{line:1,column:18},source:''},
+              name: 'x'
+            },
+            init: null
+          }
+        ]
+      },
+      right: {
+        type: 'Identifier',
+        loc:{start:{line:1,column:22},end:{line:1,column:24},source:''},
+        name: 'it'
+      },
+      await: true,
+      body: {
+        type: 'BlockStatement',
+        loc:{start:{line:1,column:26},end:{line:1,column:28},source:''},
+        body: []
+      }
+    }
+  ]
+}
+
+tokens (11x):
+       ID_for ID_await PUNC_PAREN_OPEN ID_using IDENT ID_of IDENT
+       PUNC_PAREN_CLOSE PUNC_CURLY_OPEN PUNC_CURLY_CLOSE
+`````
 
 ### Sloppy mode with AnnexB
 
@@ -62,4 +107,8 @@ _Output same as sloppy mode._
 
 Parsed with the module goal with AnnexB rules enabled.
 
-_Output same as sloppy mode._
+_Output same as module mode._
+
+## AST Printer
+
+Printer output was same as input [module][annexb:no]

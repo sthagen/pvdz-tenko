@@ -1,23 +1,21 @@
 # Tenko parser test case
 
-- Path: tests/testcases/bindings/functions/rebinding_func_name/double_decl_in_block_scope.md
+- Path: tests/testcases/functions/declaration/block_scoped/annexb_duplicate_plain_function_in_block_pass.md
 
-> :: bindings : functions : rebinding func name
+> :: functions : declaration : block scoped
 >
-> ::> double decl in block scope
-> 
-> the func name is lexical but in its own scope, even for func exprs, however;
-> 
-> https://tc39.github.io/ecma262/#sec-block-static-semantics-toplevellexicallydeclarednames
-> 
-> > At the top level of a function, or script, function declarations are treated like var declarations rather than like lexical declarations.
+> ::> annexb duplicate plain function in block pass
+>
+> Annex B B.3.3.4: duplicate LexicallyDeclaredNames in block allowed when only bound by FunctionDeclarations (sloppy + web compat)
+>
+> In non-strict mode, duplicate plain function declarations in same block are allowed. Fails in sloppy without annexb; passes in sloppy+annexb.
 
 ## PASS ANNEXB
 
 ## Input
 
 `````js
-{ function f(){} function f(){} }
+{ function a() {} function a() {} }
 `````
 
 ## Output
@@ -35,43 +33,43 @@ Parsed with script goal and as if the code did not start with strict mode header
 `````
 ast: {
   type: 'Program',
-  loc:{start:{line:1,column:0},end:{line:1,column:33},source:''},
+  loc:{start:{line:1,column:0},end:{line:1,column:35},source:''},
   body: [
     {
       type: 'BlockStatement',
-      loc:{start:{line:1,column:0},end:{line:1,column:33},source:''},
+      loc:{start:{line:1,column:0},end:{line:1,column:35},source:''},
       body: [
         {
           type: 'FunctionDeclaration',
-          loc:{start:{line:1,column:2},end:{line:1,column:16},source:''},
+          loc:{start:{line:1,column:2},end:{line:1,column:17},source:''},
           generator: false,
           async: false,
           id: {
             type: 'Identifier',
             loc:{start:{line:1,column:11},end:{line:1,column:12},source:''},
-            name: 'f'
+            name: 'a'
           },
           params: [],
           body: {
             type: 'BlockStatement',
-            loc:{start:{line:1,column:14},end:{line:1,column:16},source:''},
+            loc:{start:{line:1,column:15},end:{line:1,column:17},source:''},
             body: []
           }
         },
         {
           type: 'FunctionDeclaration',
-          loc:{start:{line:1,column:17},end:{line:1,column:31},source:''},
+          loc:{start:{line:1,column:18},end:{line:1,column:33},source:''},
           generator: false,
           async: false,
           id: {
             type: 'Identifier',
-            loc:{start:{line:1,column:26},end:{line:1,column:27},source:''},
-            name: 'f'
+            loc:{start:{line:1,column:27},end:{line:1,column:28},source:''},
+            name: 'a'
           },
           params: [],
           body: {
             type: 'BlockStatement',
-            loc:{start:{line:1,column:29},end:{line:1,column:31},source:''},
+            loc:{start:{line:1,column:31},end:{line:1,column:33},source:''},
             body: []
           }
         }
@@ -93,12 +91,12 @@ Parsed with script goal but as if it was starting with `"use strict"` at the top
 
 `````
 throws: Parser error!
-  Attempted to create a lexical binding for `f` but another binding already existed on the same level
+  Attempted to create a lexical binding for `a` but another binding already existed on the same level
 
-start@1:0, error@1:26
+start@1:0, error@1:27
 ╔══╦═════════════════
- 1 ║ { function f(){} function f(){} }
-   ║                           ^------- error
+ 1 ║ { function a() {} function a() {} }
+   ║                            ^------- error
 ╚══╩═════════════════
 
 `````
@@ -119,7 +117,7 @@ _Output same as sloppy mode._
 
 Parsed with the module goal with AnnexB rules enabled.
 
-_Output same as sloppy mode._
+_Output same as strict mode._
 
 ## AST Printer
 
@@ -127,8 +125,8 @@ Printer output different from input [sloppy][annexb:no]:
 
 ````js
 {
-function f() {}
-function f() {}
+function a() {}
+function a() {}
 }
 ````
 
