@@ -1,38 +1,19 @@
-# Tenko parser test cases
+# Tenko parser test case
 
-> Dynamic import will be introduced in ES2020 / ES11 and is a fairly simple extension syntactically because `import` was already very restricted.
+- Path: tests/testcases/import_attributes/dynamic_import_second_arg_call.md
 
-These cases are automatically extrapolated and written to their own file.
-Each case is applied to each test by simply replacing `#` with the actual case.
+> :: import attributes
+>
+> ::> dynamic import second arg call
+>
+> Dynamic import with function call as second arg is syntactically valid
+
+## PASS
 
 ## Input
 
-### Cases
-
-> `````js
-> undefined
-> `````
-
-> `````js
-> 10
-> `````
-
-> `````js
-> 11
-> `````
-
-> `````js
-> Infinity
-> `````
-
-### Templates
-
-- `es = #`
-
-#### Simple statement case
-
 `````js
-import('foo');
+import('x', getOpts())
 `````
 
 ## Output
@@ -50,14 +31,14 @@ Parsed with script goal and as if the code did not start with strict mode header
 `````
 ast: {
   type: 'Program',
-  loc:{start:{line:1,column:0},end:{line:1,column:14},source:''},
+  loc:{start:{line:1,column:0},end:{line:1,column:22},source:''},
   body: [
     {
       type: 'ExpressionStatement',
-      loc:{start:{line:1,column:0},end:{line:1,column:14},source:''},
+      loc:{start:{line:1,column:0},end:{line:1,column:22},source:''},
       expression: {
         type: 'CallExpression',
-        loc:{start:{line:1,column:0},end:{line:1,column:13},source:''},
+        loc:{start:{line:1,column:0},end:{line:1,column:22},source:''},
         optional: false,
         callee: {
           type: 'Import',
@@ -66,9 +47,20 @@ ast: {
         arguments: [
           {
             type: 'Literal',
-            loc:{start:{line:1,column:7},end:{line:1,column:12},source:''},
-            value: 'foo',
-            raw: "'foo'"
+            loc:{start:{line:1,column:7},end:{line:1,column:10},source:''},
+            value: 'x',
+            raw: "'x'"
+          },
+          {
+            type: 'CallExpression',
+            loc:{start:{line:1,column:12},end:{line:1,column:21},source:''},
+            optional: false,
+            callee: {
+              type: 'Identifier',
+              loc:{start:{line:1,column:12},end:{line:1,column:19},source:''},
+              name: 'getOpts'
+            },
+            arguments: []
           }
         ]
       }
@@ -76,9 +68,9 @@ ast: {
   ]
 }
 
-tokens (6x):
-       ID_import PUNC_PAREN_OPEN STRING_SINGLE PUNC_PAREN_CLOSE
-       PUNC_SEMI
+tokens (10x):
+       ID_import PUNC_PAREN_OPEN STRING_SINGLE PUNC_COMMA IDENT
+       PUNC_PAREN_OPEN PUNC_PAREN_CLOSE PUNC_PAREN_CLOSE ASI
 `````
 
 ### Strict mode
@@ -107,4 +99,10 @@ _Output same as sloppy mode._
 
 ## AST Printer
 
-Printer output was same as input [sloppy][annexb:no]
+Printer output different from input [sloppy][annexb:no]:
+
+````js
+import('x', getOpts());
+````
+
+Produces same AST

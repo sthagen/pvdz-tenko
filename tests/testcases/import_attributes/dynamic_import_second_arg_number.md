@@ -1,19 +1,19 @@
 # Tenko parser test case
 
-- Path: tests/testcases/import_meta/regression_new_grouped_dynamic_import_rejected.md
+- Path: tests/testcases/import_attributes/dynamic_import_second_arg_number.md
 
-> :: import meta
+> :: import attributes
 >
-> ::> regression new grouped dynamic import rejected
+> ::> dynamic import second arg number
 >
-> new (import('url')) is valid because (import('url')) is a ParenthesizedExpression (PrimaryExpression)
+> Dynamic import with number as second arg is syntactically valid
 
 ## PASS
 
 ## Input
 
 `````js
-new (import('url'))
+import('x', 42)
 `````
 
 ## Output
@@ -31,40 +31,41 @@ Parsed with script goal and as if the code did not start with strict mode header
 `````
 ast: {
   type: 'Program',
-  loc:{start:{line:1,column:0},end:{line:1,column:19},source:''},
+  loc:{start:{line:1,column:0},end:{line:1,column:15},source:''},
   body: [
     {
       type: 'ExpressionStatement',
-      loc:{start:{line:1,column:0},end:{line:1,column:19},source:''},
+      loc:{start:{line:1,column:0},end:{line:1,column:15},source:''},
       expression: {
-        type: 'NewExpression',
-        loc:{start:{line:1,column:0},end:{line:1,column:19},source:''},
-        arguments: [],
+        type: 'CallExpression',
+        loc:{start:{line:1,column:0},end:{line:1,column:15},source:''},
+        optional: false,
         callee: {
-          type: 'CallExpression',
-          loc:{start:{line:1,column:5},end:{line:1,column:18},source:''},
-          optional: false,
-          callee: {
-            type: 'Import',
-            loc:{start:{line:1,column:5},end:{line:1,column:11},source:''}
+          type: 'Import',
+          loc:{start:{line:1,column:0},end:{line:1,column:6},source:''}
+        },
+        arguments: [
+          {
+            type: 'Literal',
+            loc:{start:{line:1,column:7},end:{line:1,column:10},source:''},
+            value: 'x',
+            raw: "'x'"
           },
-          arguments: [
-            {
-              type: 'Literal',
-              loc:{start:{line:1,column:12},end:{line:1,column:17},source:''},
-              value: 'url',
-              raw: "'url'"
-            }
-          ]
-        }
+          {
+            type: 'Literal',
+            loc:{start:{line:1,column:12},end:{line:1,column:14},source:''},
+            value: 42,
+            raw: '42'
+          }
+        ]
       }
     }
   ]
 }
 
-tokens (9x):
-       ID_new PUNC_PAREN_OPEN ID_import PUNC_PAREN_OPEN STRING_SINGLE
-       PUNC_PAREN_CLOSE PUNC_PAREN_CLOSE ASI
+tokens (8x):
+       ID_import PUNC_PAREN_OPEN STRING_SINGLE PUNC_COMMA NUMBER_DEC
+       PUNC_PAREN_CLOSE ASI
 `````
 
 ### Strict mode
@@ -96,7 +97,7 @@ _Output same as sloppy mode._
 Printer output different from input [sloppy][annexb:no]:
 
 ````js
-new (import('url'));
+import('x', 42);
 ````
 
 Produces same AST

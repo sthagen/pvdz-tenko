@@ -1,19 +1,21 @@
 # Tenko parser test case
 
-- Path: tests/testcases/import_dynamic/new_import_call_invalid_fail.md
+- Path: tests/testcases/import_attributes/dynamic_import_second_arg_no_import_attrs_fail.md
 
-> :: import dynamic
+> :: import attributes
 >
-> ::> new import call invalid fail
+> ::> dynamic import second arg no import attrs fail
 >
-> new import() is invalid; ImportCall cannot be direct operand of new (use new (import()) for covered form)
+> Dynamic import with second arg should fail when import attributes are disabled (pre-ES2025)
 
 ## FAIL
 
 ## Input
 
+- `es = 15`
+
 `````js
-new import('')
+import('x', '')
 `````
 
 ## Output
@@ -30,12 +32,12 @@ Parsed with script goal and as if the code did not start with strict mode header
 
 `````
 throws: Parser error!
-  Cannot use dynamic import as an argument to `new`, the spec simply does not allow it
+  Dynamic `import` only expected exactly one argument and does not allow for a trailing comma
 
-start@1:0, error@1:4
+start@1:0, error@1:0
 ╔══╦════════════════
- 1 ║ new import('')
-   ║     ^^^^^^------- error
+ 1 ║ import('x', '')
+   ║ ^^^^^^^^^^^------- error
 ╚══╩════════════════
 
 `````

@@ -1,19 +1,19 @@
 # Tenko parser test case
 
-- Path: tests/testcases/import_dynamic/new_import_call_invalid_fail.md
+- Path: tests/testcases/import_meta/escape_sequence_meta_fail.md
 
-> :: import dynamic
+> :: import meta
 >
-> ::> new import call invalid fail
+> ::> escape sequence meta fail
 >
-> new import() is invalid; ImportCall cannot be direct operand of new (use new (import()) for covered form)
+> import.meta requires "meta" to be written without escape sequences (terminal must appear exactly as written)
 
 ## FAIL
 
 ## Input
 
 `````js
-new import('')
+import.m\u0065ta;
 `````
 
 ## Output
@@ -30,12 +30,12 @@ Parsed with script goal and as if the code did not start with strict mode header
 
 `````
 throws: Parser error!
-  Cannot use dynamic import as an argument to `new`, the spec simply does not allow it
+  `import.meta` is only valid in module goal
 
-start@1:0, error@1:4
+start@1:0, error@1:0
 ╔══╦════════════════
- 1 ║ new import('')
-   ║     ^^^^^^------- error
+ 1 ║ import.m\u0065ta;
+   ║ ^^^^^^------- error
 ╚══╩════════════════
 
 `````
@@ -50,7 +50,17 @@ _Output same as sloppy mode._
 
 Parsed with the module goal.
 
-_Output same as sloppy mode._
+`````
+throws: Parser error!
+  `import.meta` must not contain escaped characters
+
+start@1:0, error@1:7
+╔══╦════════════════
+ 1 ║ import.m\u0065ta;
+   ║        ^^^^^^^^^------- error
+╚══╩════════════════
+
+`````
 
 ### Sloppy mode with AnnexB
 
@@ -62,4 +72,4 @@ _Output same as sloppy mode._
 
 Parsed with the module goal with AnnexB rules enabled.
 
-_Output same as sloppy mode._
+_Output same as module mode._
