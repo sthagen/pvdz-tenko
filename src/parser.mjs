@@ -769,9 +769,10 @@ function Parser(code, options = {}) {
   function checkClassFieldNameErrors(isPrivate, isStatic, canon, start, stop) {
     // - `class C { #constructor = 1; }`               error
     // - `class C { constructor = 1; }`                error (non-static)
+    // - `class C { static constructor = 1; }`         error (static)
     // - `class C { static prototype = 1; }`           error (non-private)
     if (isPrivate && canon === 'constructor') return THROW_RANGE('Class fields may not be named `#constructor`', start, stop);
-    if (!isPrivate && !isStatic && canon === 'constructor') return THROW_RANGE('Class fields may not be named `constructor`', start, stop);
+    if (!isPrivate && canon === 'constructor') return THROW_RANGE('Class fields may not be named `constructor`', start, stop);
     if (isStatic && !isPrivate && canon === 'prototype') return THROW_RANGE('Static class fields may not be named `prototype`', start, stop);
   }
   function parseClassFieldInit(lexerFlags, $tp_methodStart_start, $tp_methodStart_line, $tp_methodStart_column) {
@@ -2340,8 +2341,8 @@ function Parser(code, options = {}) {
     // does not propagate up in any context where it is allowed and when nested in `if` or `else` it's considered to
     // be wrapped in a block. So neither legit function propagates to the parent of the statement that encloses it.
 
-    ASSERT(bindingType !== BINDING_TYPE_FUNC_VAR || ( (fdState === FDS_VAR && (hasNoFlag(lexerFlags, LF_IN_GLOBAL) || goalMode === GOAL_SCRIPT)) || (fdState === FDS_LEX && hasNoFlag(lexerFlags, LF_STRICT_MODE) && isLabelled !== IS_LABELLED) ), 'FUNC_VAR implies valid var-hoisting context (top-level or sloppy block, not async/gen per B.3.2)');
-    ASSERT(bindingType !== BINDING_TYPE_FUNC_STMT || (fdState === FDS_LEX && hasNoFlag(lexerFlags, LF_STRICT_MODE) && isLabelled === IS_LABELLED), 'FUNC_STMT is only for sloppy labelled plain function decls in blocks (allows duplicate exception)');
+    ASSERT(bindingType !== BINDING_TYPE_FUNC_VAR || ( (fdState === FDS_VAR && (hasNoFlag(lexerFlags, LF_IN_GLOBAL) || goalMode === GOAL_SCRIPT)) || (fdState === FDS_LEX && hasNoFlag(lexerFlags, LF_STRICT_MODE) && isLabelled !== IS_LABELLED && options_webCompat === WEB_COMPAT_ON) ), 'FUNC_VAR implies valid var-hoisting context (top-level or sloppy+webcompat block, not async/gen per B.3.2)');
+    ASSERT(bindingType !== BINDING_TYPE_FUNC_STMT || (fdState === FDS_LEX && hasNoFlag(lexerFlags, LF_STRICT_MODE) && isLabelled === IS_LABELLED && options_webCompat === WEB_COMPAT_ON), 'FUNC_STMT is only for sloppy+webcompat labelled plain function decls in blocks (allows duplicate exception)');
 
     if (bindingType === BINDING_TYPE_FUNC_VAR) {
       // B.3.3.1: In webcompat mode, if the block function's implicit var would conflict with a lexical/catch binding
@@ -2363,6 +2364,7 @@ function Parser(code, options = {}) {
         ASSERT(isLabelled !== IS_LABELLED, 'labelled block functions use FUNC_STMT, not FUNC_VAR');
         let scanScoop = scoop;
         let hasConflict = false;
+        let conflictType = BINDING_TYPE_NONE;
         while (scanScoop && scanScoop.type !== SCOPE_LAYER_FUNC_ROOT) {
           if (scanScoop.names !== HAS_NO_BINDINGS && scanScoop.names.has($tp_bindingIdent_canon)) {
             let existingType = scanScoop.names.get($tp_bindingIdent_canon);
@@ -2378,6 +2380,7 @@ function Parser(code, options = {}) {
               || existingType === BINDING_TYPE_CATCH_OTHER
               || existingType === BINDING_TYPE_USING || existingType === BINDING_TYPE_AWAIT_USING) {
               hasConflict = true;
+              conflictType = existingType;
               break;
             }
             // If we see VAR, FUNC_VAR, ARG, or CATCH_IDENT, these don't conflict with var → keep scanning
@@ -2386,12 +2389,33 @@ function Parser(code, options = {}) {
           scanScoop = scanScoop.parent;
         }
         if (hasConflict) {
-          // Skip var creation per B.3.3.1, treat the function as block-scoped only
-          SCOPE_addLexBinding(scoop, $tp_bindingIdent_start, $tp_bindingIdent_stop, $tp_bindingIdent_canon, BINDING_TYPE_FUNC_LEX, fdState);
+          // Skip var creation per B.3.3.1, treat the function as block-scoped only.
+          // If conflict was with another sloppy block function (FUNC_STMT), use FUNC_STMT to allow the
+          // duplicate exception (sec-block-duplicates-allowed-static-semantics). Otherwise use FUNC_LEX.
+          let demotedType = conflictType === BINDING_TYPE_FUNC_STMT ? BINDING_TYPE_FUNC_STMT : BINDING_TYPE_FUNC_LEX;
+          SCOPE_addLexBinding(scoop, $tp_bindingIdent_start, $tp_bindingIdent_stop, $tp_bindingIdent_canon, demotedType, fdState);
           return;
         }
       }
-      SCOPE_addVarBinding(lexerFlags, scoop, $tp_bindingIdent_start, $tp_bindingIdent_stop, $tp_bindingIdent_canon, bindingType);
+
+      // A sloppy block function is lexically scoped within its declaring block (it is in the block's
+      // LexicallyDeclaredNames), but also gets a var binding hoisted to enclosing scopes per Annex B.
+      // At the block scope: use FUNC_STMT so that `var` in the same block is rejected (verifyDuplicateVarBinding
+      // treats FUNC_STMT as a lex conflict) and duplicate block functions are allowed (the FUNC_STMT duplicate
+      // exception in SCOPE_addLexBinding). At parent scopes: use FUNC_VAR for var hoisting.
+      // [x]: `{ function f(){} var f }` — lex vs var in same block
+      // [x]: `{ function f(){} { var f } }` — var in nested block conflicts with lex in parent block
+      // [v]: `{ function f(){} } var f;` — different scope levels, no conflict
+      // [v]: `{ function f(){} function f(){} }` — duplicate block functions allowed (sloppy+webcompat)
+      if (fdState === FDS_LEX && options_webCompat === WEB_COMPAT_ON) {
+        SCOPE_addLexBinding(scoop, $tp_bindingIdent_start, $tp_bindingIdent_stop, $tp_bindingIdent_canon, BINDING_TYPE_FUNC_STMT, fdState);
+        // Hoist var to parent scopes (up to but not including func root)
+        if (scoop.parent && scoop.parent.type !== SCOPE_LAYER_FUNC_ROOT) {
+          SCOPE_addVarBinding(lexerFlags, scoop.parent, $tp_bindingIdent_start, $tp_bindingIdent_stop, $tp_bindingIdent_canon, BINDING_TYPE_FUNC_VAR);
+        }
+      } else {
+        SCOPE_addVarBinding(lexerFlags, scoop, $tp_bindingIdent_start, $tp_bindingIdent_stop, $tp_bindingIdent_canon, bindingType);
+      }
     } else {
       ASSERT(bindingType === BINDING_TYPE_FUNC_LEX || bindingType === BINDING_TYPE_FUNC_STMT, 'non-FUNC_VAR must be FUNC_LEX or FUNC_STMT: block-scoped, no var hoisting', bindingType);
       SCOPE_addLexBinding(scoop, $tp_bindingIdent_start, $tp_bindingIdent_stop, $tp_bindingIdent_canon, bindingType, fdState);
@@ -2685,10 +2709,12 @@ function Parser(code, options = {}) {
         // https://tc39.es/ecma262/#sec-block-duplicates-allowed-static-semantics
         // > It is a Syntax Error if the LexicallyDeclaredNames of StatementList contains any duplicate entries, unless the
         // > source code matching this production is not strict mode code and the duplicate entries are only bound by FunctionDeclarations.
-        // Only allow duplicates for FUNC_STMT bindings (sloppy labelled plain FunctionDeclarations in blocks/switches).
-        // In sloppy mode, non-labelled plain block functions go through the FUNC_VAR path (no lex check needed).
+        // Allow duplicates for FUNC_STMT bindings (sloppy plain FunctionDeclarations in blocks/switches, both
+        // labelled and non-labelled). Non-labelled block functions use FUNC_STMT at block scope for lex conflict
+        // detection while hoisting FUNC_VAR to parent scopes. Labelled block functions use FUNC_STMT throughout.
         // Async/generator functions (FUNC_LEX) and strict mode functions (FUNC_LEX) never get this exception.
         // [v]: `{ label1: function f() {} ; label2: function f() {} }` (sloppy+webcompat)
+        // [v]: `{ function f() {} function f() {} }` (sloppy+webcompat, non-labelled duplicate block funcs)
         // [x]: `{ async function f() {} ; async function f() {} }` (always error, FUNC_LEX)
       }
     }
@@ -3406,22 +3432,24 @@ function Parser(code, options = {}) {
         // [v]: `function f(){}` (top-level script)
         // [v]: `function g(){ function f(){} }` (function body root)
         nameBindingType = BINDING_TYPE_FUNC_VAR;
-      } else if (fdState === FDS_LEX && hasNoFlag(lexerFlags, LF_STRICT_MODE) && isLabelled !== IS_LABELLED && $tp_async_type === $UNTYPED && $tp_star_type === $UNTYPED) {
-        // Sloppy plain non-labelled block function → var-like hoisting per Annex B B.3.2/B.3.3.
+      } else if (fdState === FDS_LEX && hasNoFlag(lexerFlags, LF_STRICT_MODE) && isLabelled !== IS_LABELLED && $tp_async_type === $UNTYPED && $tp_star_type === $UNTYPED && options_webCompat === WEB_COMPAT_ON) {
+        // Sloppy plain non-labelled block function + webcompat → var-like hoisting per Annex B B.3.2/B.3.3.
         // Only applies to plain FunctionDeclaration (not async/generator — those are always FUNC_LEX in blocks).
+        // Without webcompat, block functions are block-scoped (FUNC_LEX) even in sloppy mode.
         // Note: B.3.3.1 (conflict skip) is handled in SCOPE_addFuncDeclName, not here.
-        // [v]: `{ function f(){} }` (sloppy mode, both with and without annexb)
+        // [v]: `{ function f(){} }` (sloppy+webcompat)
         // [x]: `{ async function f(){} }` → falls to FUNC_LEX below ($tp_async_type !== $UNTYPED)
         // [x]: `{ function *f(){} }` → falls to FUNC_LEX below ($tp_star_type !== $UNTYPED)
         ASSERT($tp_async_type === $UNTYPED, 'async functions in blocks never get FUNC_VAR');
         ASSERT($tp_star_type === $UNTYPED, 'generator functions in blocks never get FUNC_VAR');
         nameBindingType = BINDING_TYPE_FUNC_VAR;
-      } else if (fdState === FDS_LEX && hasNoFlag(lexerFlags, LF_STRICT_MODE) && $tp_async_type === $UNTYPED && $tp_star_type === $UNTYPED) {
-        // Sloppy labelled plain function in block → lexical, but uses FUNC_STMT to allow the
-        // duplicate exception per sec-block-duplicates-allowed-static-semantics:
+      } else if (fdState === FDS_LEX && hasNoFlag(lexerFlags, LF_STRICT_MODE) && $tp_async_type === $UNTYPED && $tp_star_type === $UNTYPED && options_webCompat === WEB_COMPAT_ON) {
+        // Sloppy labelled plain function in block + webcompat → lexical, but uses FUNC_STMT to allow the
+        // duplicate exception per sec-block-duplicates-allowed-static-semantics (part of Annex B):
         // > It is a Syntax Error if the LexicallyDeclaredNames of StatementList contains any duplicate
         // > entries, unless the source code matching this production is not strict mode code and the
         // > duplicate entries are only bound by FunctionDeclarations.
+        // Without webcompat, labelled block functions are FUNC_LEX (no duplicate exception).
         // [v]: `{ label1: function f(){} ; label2: function f(){} }` (sloppy+webcompat → FUNC_STMT dup OK)
         // [x]: `{ label1: async function f(){} ; label2: async function f(){} }` → FUNC_LEX (dup throws)
         ASSERT(isLabelled === IS_LABELLED, 'by elimination from the previous condition, this must be labelled');
@@ -11910,6 +11938,14 @@ function Parser(code, options = {}) {
     if (isIdentToken($tp_keyStart_type)) {
       // - `({get key(){})`
       //          ^^^
+
+      // Private names are not allowed as object literal method keys (only in class bodies)
+      // - `({async #m(){}})`
+      // - `({get #m(){}})`
+      // - `({set #m(x){}})`
+      if ($tp_keyStart_type === $ID_PRIVATE_IDENT) {
+        return THROW_RANGE('Private identifiers are not allowed in object literals or patterns', $tp_keyStart_start, $tp_keyStart_stop);
+      }
 
       ASSERT_skipAny($G_IDENT, lexerFlags); // regex irrelevant because div must lead to an error
 

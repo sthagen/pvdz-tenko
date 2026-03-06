@@ -29,7 +29,7 @@ Parsed with script goal and as if the code did not start with strict mode header
 
 `````
 throws: Lexer error!
-    Regex: The property `RGI_Emoji` is only valid with the v flag
+    Regex: Properties of strings (e.g. `\p{Basic_Emoji}`) are only valid with the v flag, not the u flag
 
 start@1:0, error@1:0
 ╔══╦════════════════

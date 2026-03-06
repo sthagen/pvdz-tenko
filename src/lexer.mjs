@@ -441,9 +441,19 @@ import {
 // https://tc39.es/ecma262/#table-nonbinary-unicode-properties
 // (Manually copied from spec. Note that the numbers of the table is not "fixed" so don't refer to them like that)
 const TABLE_NONBIN_UNI_PROPS = ',General_Category,gc,Script,sc,Script_Extensions,scx,';
-const TABLE_BIN_UNI_PROPS = ',ASCII,ASCII_Hex_Digit,AHex,Alphabetic,Alpha,Any,Assigned,Bidi_Control,Bidi_C,Bidi_Mirrored,Bidi_M,Case_Ignorable,CI,Cased,Changes_When_Casefolded,CWCF,Changes_When_Casemapped,CWCM,Changes_When_Lowercased,CWL,Changes_When_NFKC_Casefolded,CWKCF,Changes_When_Titlecased,CWT,Changes_When_Uppercased,CWU,Dash,Default_Ignorable_Code_Point,DI,Deprecated,Dep,Diacritic,Dia,Emoji,Emoji_Component,Emoji_Modifier,Emoji_Modifier_Base,Emoji_Presentation,Extended_Pictographic,Extender,Ext,Grapheme_Base,Gr_Base,Grapheme_Extend,Gr_Ext,Hex_Digit,Hex,IDS_Binary_Operator,IDSB,IDS_Trinary_Operator,IDST,ID_Continue,IDC,ID_Start,IDS,Ideographic,Ideo,Join_Control,Join_C,Logical_Order_Exception,LOE,Lowercase,Lower,Math,Noncharacter_Code_Point,NChar,Pattern_Syntax,Pat_Syn,Pattern_White_Space,Pat_WS,Quotation_Mark,QMark,Radical,Regional_Indicator,RI,Sentence_Terminal,STerm,Soft_Dotted,SD,Terminal_Punctuation,Term,Unified_Ideograph,UIdeo,Uppercase,Upper,Variation_Selector,VS,White_Space,space,XID_Continue,XIDC,XID_Start,XIDS,';
+const TABLE_BIN_UNI_PROPS = ',ASCII,ASCII_Hex_Digit,AHex,Alphabetic,Alpha,Any,Assigned,Bidi_Control,Bidi_C,Bidi_Mirrored,Bidi_M,Case_Ignorable,CI,Cased,Changes_When_Casefolded,CWCF,Changes_When_Casemapped,CWCM,Changes_When_Lowercased,CWL,Changes_When_NFKC_Casefolded,CWKCF,Changes_When_Titlecased,CWT,Changes_When_Uppercased,CWU,Dash,Default_Ignorable_Code_Point,DI,Deprecated,Dep,Diacritic,Dia,Emoji,Emoji_Component,EComp,Emoji_Modifier,EMod,Emoji_Modifier_Base,EBase,Emoji_Presentation,EPres,Extended_Pictographic,ExtPict,Extender,Ext,Grapheme_Base,Gr_Base,Grapheme_Extend,Gr_Ext,Hex_Digit,Hex,IDS_Binary_Operator,IDSB,IDS_Trinary_Operator,IDST,ID_Continue,IDC,ID_Start,IDS,Ideographic,Ideo,Join_Control,Join_C,Logical_Order_Exception,LOE,Lowercase,Lower,Math,Noncharacter_Code_Point,NChar,Pattern_Syntax,Pat_Syn,Pattern_White_Space,Pat_WS,Quotation_Mark,QMark,Radical,Regional_Indicator,RI,Sentence_Terminal,STerm,Soft_Dotted,SD,Terminal_Punctuation,Term,Unified_Ideograph,UIdeo,Uppercase,Upper,Variation_Selector,VS,White_Space,space,XID_Continue,XIDC,XID_Start,XIDS,';
 const TABLE_GEN_CAT_VALUES = ',Cased_Letter,LC,Close_Punctuation,Pe,Connector_Punctuation,Pc,Control,Cc,cntrl,Currency_Symbol,Sc,Dash_Punctuation,Pd,Decimal_Number,Nd,digit,Enclosing_Mark,Me,Final_Punctuation,Pf,Format,Cf,Initial_Punctuation,Pi,Letter,L,Letter_Number,Nl,Line_Separator,Zl,Lowercase_Letter,Ll,Mark,M,Combining_Mark,Math_Symbol,Sm,Modifier_Letter,Lm,Modifier_Symbol,Sk,Nonspacing_Mark,Mn,Number,N,Open_Punctuation,Ps,Other,C,Other_Letter,Lo,Other_Number,No,Other_Punctuation,Po,Other_Symbol,So,Paragraph_Separator,Zp,Private_Use,Co,Punctuation,P,punct,Separator,Z,Space_Separator,Zs,Spacing_Mark,Mc,Surrogate,Cs,Symbol,S,Titlecase_Letter,Lt,Unassigned,Cn,Uppercase_Letter,Lu,';
-const TABLE_SCRIPT_VALUES = ',Adlam,Adlm,Ahom,Anatolian_Hieroglyphs,Hluw,Arabic,Arab,Armenian,Armn,Avestan,Avst,Balinese,Bali,Bamum,Bamu,Bassa_Vah,Bass,Batak,Batk,Bengali,Beng,Bhaiksuki,Bhks,Bopomofo,Bopo,Brahmi,Brah,Braille,Brai,Buginese,Bugi,Buhid,Buhd,Canadian_Aboriginal,Cans,Carian,Cari,Caucasian_Albanian,Aghb,Chakma,Cakm,Cham,Cherokee,Cher,Common,Zyyy,Coptic,Copt,Qaac,Cuneiform,Xsux,Cypriot,Cprt,Cyrillic,Cyrl,Deseret,Dsrt,Devanagari,Deva,Dogra,Dogr,Duployan,Dupl,Egyptian_Hieroglyphs,Egyp,Elbasan,Elba,Elymaic,Elym,Ethiopic,Ethi,Georgian,Geor,Glagolitic,Glag,Gothic,Goth,Grantha,Gran,Greek,Grek,Gujarati,Gujr,Gunjala_Gondi,Gong,Gurmukhi,Guru,Han,Hani,Hangul,Hang,Hanifi_Rohingya,Rohg,Hanunoo,Hano,Hatran,Hatr,Hebrew,Hebr,Hiragana,Hira,Imperial_Aramaic,Armi,Inherited,Zinh,Qaai,Inscriptional_Pahlavi,Phli,Inscriptional_Parthian,Prti,Javanese,Java,Kaithi,Kthi,Kannada,Knda,Katakana,Kana,Kayah_Li,Kali,Kharoshthi,Khar,Khmer,Khmr,Khojki,Khoj,Khudawadi,Sind,Lao,Laoo,Latin,Latn,Lepcha,Lepc,Limbu,Limb,Linear_A,Lina,Linear_B,Linb,Lisu,Lycian,Lyci,Lydian,Lydi,Mahajani,Mahj,Makasar,Maka,Malayalam,Mlym,Mandaic,Mand,Manichaean,Mani,Marchen,Marc,Medefaidrin,Medf,Masaram_Gondi,Gonm,Meetei_Mayek,Mtei,Mende_Kikakui,Mend,Meroitic_Cursive,Merc,Meroitic_Hieroglyphs,Mero,Miao,Plrd,Modi,Mongolian,Mong,Mro,Mroo,Multani,Mult,Myanmar,Mymr,Nabataean,Nbat,Nandinagari,Nand,New_Tai_Lue,Talu,Newa,Nko,Nkoo,Nushu,Nshu,Nyiakeng_Puachue_Hmong,Hmnp,Ogham,Ogam,Ol_Chiki,Olck,Old_Hungarian,Hung,Old_Italic,Ital,Old_North_Arabian,Narb,Old_Permic,Perm,Old_Persian,Xpeo,Old_Sogdian,Sogo,Old_South_Arabian,Sarb,Old_Turkic,Orkh,Oriya,Orya,Osage,Osge,Osmanya,Osma,Pahawh_Hmong,Hmng,Palmyrene,Palm,Pau_Cin_Hau,Pauc,Phags_Pa,Phag,Phoenician,Phnx,Psalter_Pahlavi,Phlp,Rejang,Rjng,Runic,Runr,Samaritan,Samr,Saurashtra,Saur,Sharada,Shrd,Shavian,Shaw,Siddham,Sidd,SignWriting,Sgnw,Sinhala,Sinh,Sogdian,Sogd,Sora_Sompeng,Sora,Soyombo,Soyo,Sundanese,Sund,Syloti_Nagri,Sylo,Syriac,Syrc,Tagalog,Tglg,Tagbanwa,Tagb,Tai_Le,Tale,Tai_Tham,Lana,Tai_Viet,Tavt,Takri,Takr,Tamil,Taml,Tangut,Tang,Telugu,Telu,Thaana,Thaa,Thai,Tibetan,Tibt,Tifinagh,Tfng,Tirhuta,Tirh,Ugaritic,Ugar,Vai,Vaii,Wancho,Wcho,Warang_Citi,Wara,Yi,Yiii,Zanabazar_Square,Zanb,';
+// Script values are split by Unicode version so they can be gated by targetEsVersion
+// Base table: Unicode 12.0 (ES2020, version 11)
+const TABLE_SCRIPT_VALUES_BASE = ',Adlam,Adlm,Ahom,Anatolian_Hieroglyphs,Hluw,Arabic,Arab,Armenian,Armn,Avestan,Avst,Balinese,Bali,Bamum,Bamu,Bassa_Vah,Bass,Batak,Batk,Bengali,Beng,Bhaiksuki,Bhks,Bopomofo,Bopo,Brahmi,Brah,Braille,Brai,Buginese,Bugi,Buhid,Buhd,Canadian_Aboriginal,Cans,Carian,Cari,Caucasian_Albanian,Aghb,Chakma,Cakm,Cham,Cherokee,Cher,Common,Zyyy,Coptic,Copt,Qaac,Cuneiform,Xsux,Cypriot,Cprt,Cyrillic,Cyrl,Deseret,Dsrt,Devanagari,Deva,Dogra,Dogr,Duployan,Dupl,Egyptian_Hieroglyphs,Egyp,Elbasan,Elba,Elymaic,Elym,Ethiopic,Ethi,Georgian,Geor,Glagolitic,Glag,Gothic,Goth,Grantha,Gran,Greek,Grek,Gujarati,Gujr,Gunjala_Gondi,Gong,Gurmukhi,Guru,Han,Hani,Hangul,Hang,Hanifi_Rohingya,Rohg,Hanunoo,Hano,Hatran,Hatr,Hebrew,Hebr,Hiragana,Hira,Imperial_Aramaic,Armi,Inherited,Zinh,Qaai,Inscriptional_Pahlavi,Phli,Inscriptional_Parthian,Prti,Javanese,Java,Kaithi,Kthi,Kannada,Knda,Katakana,Kana,Kayah_Li,Kali,Kharoshthi,Khar,Khmer,Khmr,Khojki,Khoj,Khudawadi,Sind,Lao,Laoo,Latin,Latn,Lepcha,Lepc,Limbu,Limb,Linear_A,Lina,Linear_B,Linb,Lisu,Lycian,Lyci,Lydian,Lydi,Mahajani,Mahj,Makasar,Maka,Malayalam,Mlym,Mandaic,Mand,Manichaean,Mani,Marchen,Marc,Medefaidrin,Medf,Masaram_Gondi,Gonm,Meetei_Mayek,Mtei,Mende_Kikakui,Mend,Meroitic_Cursive,Merc,Meroitic_Hieroglyphs,Mero,Miao,Plrd,Modi,Mongolian,Mong,Mro,Mroo,Multani,Mult,Myanmar,Mymr,Nabataean,Nbat,Nandinagari,Nand,New_Tai_Lue,Talu,Newa,Nko,Nkoo,Nushu,Nshu,Nyiakeng_Puachue_Hmong,Hmnp,Ogham,Ogam,Ol_Chiki,Olck,Old_Hungarian,Hung,Old_Italic,Ital,Old_North_Arabian,Narb,Old_Permic,Perm,Old_Persian,Xpeo,Old_Sogdian,Sogo,Old_South_Arabian,Sarb,Old_Turkic,Orkh,Oriya,Orya,Osage,Osge,Osmanya,Osma,Pahawh_Hmong,Hmng,Palmyrene,Palm,Pau_Cin_Hau,Pauc,Phags_Pa,Phag,Phoenician,Phnx,Psalter_Pahlavi,Phlp,Rejang,Rjng,Runic,Runr,Samaritan,Samr,Saurashtra,Saur,Sharada,Shrd,Shavian,Shaw,Siddham,Sidd,SignWriting,Sgnw,Sinhala,Sinh,Sogdian,Sogd,Sora_Sompeng,Sora,Soyombo,Soyo,Sundanese,Sund,Syloti_Nagri,Sylo,Syriac,Syrc,Tagalog,Tglg,Tagbanwa,Tagb,Tai_Le,Tale,Tai_Tham,Lana,Tai_Viet,Tavt,Takri,Takr,Tamil,Taml,Tangut,Tang,Telugu,Telu,Thaana,Thaa,Thai,Tibetan,Tibt,Tifinagh,Tfng,Tirhuta,Tirh,Ugaritic,Ugar,Vai,Vaii,Wancho,Wcho,Warang_Citi,Wara,Yi,Yiii,Zanabazar_Square,Zanb,';
+// Unicode 13.0 additions (ES2021, version 12)
+const TABLE_SCRIPT_VALUES_U13 = 'Chorasmian,Chrs,Dives_Akuru,Diak,Khitan_Small_Script,Kits,Yezidi,Yezi,';
+// Unicode 14.0 additions (ES2022, version 13)
+const TABLE_SCRIPT_VALUES_U14 = 'Cypro_Minoan,Cpmn,Old_Uyghur,Ougr,Tangsa,Tnsa,Toto,Vithkuqi,Vith,';
+// Unicode 15.0 additions (ES2023, version 14)
+const TABLE_SCRIPT_VALUES_U15 = 'Kawi,Nag_Mundari,Nagm,';
+// Properties of strings (ES2024, version 15; v-flag only) https://tc39.es/ecma262/#table-binary-unicode-properties-of-strings
+const TABLE_PROPS_OF_STRINGS = ',Basic_Emoji,Emoji_Keycap_Sequence,RGI_Emoji,RGI_Emoji_Flag_Sequence,RGI_Emoji_Modifier_Sequence,RGI_Emoji_Tag_Sequence,RGI_Emoji_ZWJ_Sequence,';
 
 import {
   BAD_ESCAPE,
@@ -559,6 +569,7 @@ function Lexer(
   const supportRegexLookbehinds = targetEsVersion >= 9 || targetEsVersion === Infinity;
   const supportRegexDotallFlag = targetEsVersion >= 9 || targetEsVersion === Infinity;
   const supportRegexNamedGroups = targetEsVersion >= 9 || targetEsVersion === Infinity;
+  const supportRegexGroupNameUnicodeEscapes = targetEsVersion >= 11 || targetEsVersion === Infinity; // ES2020: \u{...} and \uHH\uLL and literal surrogate pairs valid in group names without u-flag (tc39/ecma262#1869)
   const supportRegexDuplicateNamedCaptureGroups = targetEsVersion >= VERSION_REGEX_DUPLICATE_NAMED_GROUPS || targetEsVersion === VERSION_WHATEVER; // ES2025: duplicate names allowed when they can't both participate (MightBothParticipate)
   const supportRegexModifiers = targetEsVersion >= 16 || targetEsVersion === Infinity; // ES2025: (?ims:pattern) and (?ims-ms:pattern) inline flag modifiers
   const supportRegexIndices = targetEsVersion >= 13 || targetEsVersion === Infinity; // ES2022: hasIndices / d flag
@@ -568,6 +579,18 @@ function Lexer(
   const supportNullishCoalescing = targetEsVersion >= VERSION_NULLISH_COALESCING || targetEsVersion === VERSION_WHATEVER;
   const supportOptionalChaining = targetEsVersion >= VERSION_OPTIONAL_CHAINING || targetEsVersion === VERSION_WHATEVER;
   const supportLogicCompound = targetEsVersion >= VERSION_LOGICAL_ASSIGNMENT || targetEsVersion === VERSION_WHATEVER;
+
+  // Lazy-built script values table, constructed on first use of \p{Script=...} or \p{sc=...}
+  let _tableScriptValues = '';
+  function getTableScriptValues() {
+    if (_tableScriptValues === '') {
+      _tableScriptValues = TABLE_SCRIPT_VALUES_BASE;
+      if (targetEsVersion >= 12 || targetEsVersion === Infinity) _tableScriptValues += TABLE_SCRIPT_VALUES_U13;
+      if (targetEsVersion >= 13 || targetEsVersion === Infinity) _tableScriptValues += TABLE_SCRIPT_VALUES_U14;
+      if (targetEsVersion >= 14 || targetEsVersion === Infinity) _tableScriptValues += TABLE_SCRIPT_VALUES_U15;
+    }
+    return _tableScriptValues;
+  }
 
   let pointer = 0;
   let len = input.length;
@@ -2679,11 +2702,11 @@ function Lexer(
   let regexBodyHasSyntaxInvalidWithVFlag = false;
   let lastPotentialRegexErrorForVFlag = ''; // message shown when v flag present and regexBodyHasSyntaxInvalidWithVFlag (fallback from lastPotentialRegexError in charclass consumer if unset)
   let regexBodyUsedVOnlySyntax = false; // --, &&, nested [], \q{}; error after flags if no v flag
-  let regexBodyHasRgiEmoji = false; // \p{RGI_Emoji} is only valid with v flag; error after flags if u flag
+  let regexBodyHasPropOfStrings = false; // \p{RGI_Emoji} etc are only valid with v flag; error after flags if u flag
+  let regexBodyHasNegatedPropOfStrings = false; // \P{RGI_Emoji} or [^\p{RGI_Emoji}] etc is always an error (can't negate property of strings)
+  let regexCurrentCharClassIsNegated = false; // set to true while parsing inside [^...], so \p{...} can detect it
   let regexBranchPath = [0]; // ES2025: disjunction branch index at each nesting level (for MightBothParticipate duplicate named group check)
-  let regexGroupQuantified = []; // ES2025: regexGroupQuantified[depth] = true if the group at that depth has a repeating quantifier (* + {}), not ?
-  let regexNegativeAssertionDepth = 0; // ES2025 only (gated): > 0 when parsing inside (?! or (?<! (captures there can't participate; (?= and (?<= can)
-  let declaredGroupNamesWithPath = new Map(); // ES2025: name -> array of { path, inNegativeAssertion } (only when supportRegexDuplicateNamedCaptureGroups)
+  let declaredGroupNamesWithPath = new Map(); // ES2025: name -> array of { path, pointerStart, pointerEnd } (only when supportRegexDuplicateNamedCaptureGroups)
   function parseRegex(c) {
     nCapturingParens = 0;
     largestBackReference = 0;
@@ -2696,10 +2719,9 @@ function Lexer(
     foundInvalidGroupName = false;
     regexBodyHasSyntaxInvalidWithVFlag = false;
     regexBodyUsedVOnlySyntax = false;
-    regexBodyHasRgiEmoji = false;
+    regexBodyHasPropOfStrings = false;
+    regexBodyHasNegatedPropOfStrings = false;
     regexBranchPath = [0];
-    regexGroupQuantified = [];
-    regexNegativeAssertionDepth = 0;
     declaredGroupNamesWithPath = new Map();
 
     let ustatusBody = parseRegexBody(c);
@@ -2710,7 +2732,10 @@ function Lexer(
 
     ASSERT(ustatusBody === REGEX_ALWAYS_GOOD || lastPotentialRegexError, 'last potential error should be set if there was a potential problem', lastReportableLexerError, lastPotentialRegexError);
 
-    // ES2025 MightBothParticipate: check every pair of same-named groups with final regexGroupQuantified (https://tc39.es/ecma262/#sec-mightbothparticipate)
+    // ES2025 MightBothParticipate: check every pair of same-named groups (https://tc39.es/ecma262/#sec-mightbothparticipate)
+    // ES2025 MightBothParticipate: two groups might both participate iff their closest shared ancestor is NOT a Disjunction.
+    // In the path encoding, paths diverge iff the groups are in different alternatives of a Disjunction → can't both participate.
+    // If one path is a prefix of the other (or they're identical), they're in the same alternative chain → might both participate.
     if (supportRegexDuplicateNamedCaptureGroups) {
       for (let [name, entries] of declaredGroupNamesWithPath) {
         if (entries.length < 2) continue;
@@ -2718,23 +2743,15 @@ function Lexer(
           for (let i = 0; i < j; i++) {
             let a = entries[i];
             let b = entries[j];
-            // ES2025: one in negative assertion (?! or (?<!), one not: they can't both participate. Positive assertions (?=, (?<=) do participate; only negative exempt.
-            if (a.inNegativeAssertion !== b.inNegativeAssertion) continue;
-            let qa = a.path.map((_, idx) => !!regexGroupQuantified[idx]);
-            let qb = b.path.map((_, idx) => !!regexGroupQuantified[idx]);
-            let mightBoth = (pa, pb, qA, qB) => {
-              if ((pa.length <= pb.length && pa.every((v, i) => v === pb[i])) ||
-                  (pb.length <= pa.length && pb.every((v, i) => v === pa[i]))) return true;
-              let k = 0;
-              while (k < pa.length && k < pb.length && pa[k] === pb[k]) k++;
-              if (k >= pa.length || k >= pb.length) return true;
-              // Repeating quantifier at any level from k up to root allows both to participate (nested case).
-              for (let jj = k; jj >= 0; jj--) {
-                if (qA[jj] || qB[jj]) return true;
-              }
-              return false;
-            };
-            if (mightBoth(a.path, b.path, qa, qb)) {
+            let pa = a.path;
+            let pb = b.path;
+            // If one path is a prefix of the other, they're in the same alternative chain → might both participate
+            let minLen = Math.min(pa.length, pb.length);
+            let diverges = false;
+            for (let k = 0; k < minLen; k++) {
+              if (pa[k] !== pb[k]) { diverges = true; break; }
+            }
+            if (!diverges) {
               THROW('This group name (`' + name + '`) was already used before', b.pointerStart, b.pointerEnd);
             }
           }
@@ -2772,8 +2789,13 @@ function Lexer(
       return $ERROR;
     }
 
-    if (regexBodyHasRgiEmoji && ustatusFlags === REGEX_GOOD_WITH_U_FLAG) {
-      regexSyntaxError('The property `RGI_Emoji` is only valid with the v flag');
+    if (regexBodyHasNegatedPropOfStrings && (ustatusFlags === REGEX_GOOD_WITH_U_FLAG || ustatusFlags === REGEX_GOOD_WITH_V_FLAG)) {
+      regexSyntaxError('Negating a property of strings (`\\P{...}`) is not allowed');
+      return $ERROR;
+    }
+
+    if (regexBodyHasPropOfStrings && ustatusFlags === REGEX_GOOD_WITH_U_FLAG) {
+      regexSyntaxError('Properties of strings (e.g. `\\p{Basic_Emoji}`) are only valid with the v flag, not the u flag');
       return $ERROR;
     }
 
@@ -2853,8 +2875,6 @@ function Lexer(
     //   - reflects on surrogate pairs, unicode ruby escapes, and valid char class ranges
 
     let afterAtom = false;
-    let lastCompletedGroupDepth = 0; // ES2025: depth of group that was the last completed atom (so next quantifier applies to it); 0 = none
-
     // dont start with a quantifier
     uflagStatus = cannotBeQuantifier(c, uflagStatus, c === $$CURLY_L_7B, 'Started with a quantifier but that is not allowed');
 
@@ -2867,26 +2887,18 @@ function Lexer(
         case REGEX_ATOM_OTHER:
           ASSERT_skip(c); // this ought to be a valid regex source character
           afterAtom = true;
-          lastCompletedGroupDepth = 0;
           break;
 
         case REGEX_ATOM_DOT:
           // atom; match one character
           ASSERT_skip($$DOT_2E);
           afterAtom = true;
-          lastCompletedGroupDepth = 0;
           break;
 
         case REGEX_ATOM_QUANT:
           // doesnt matter to us which quantifier we find here
           ASSERT_skip(c);
           if (afterAtom) {
-            // ES2025: only * and + are "repeating" (both can participate); ? is optional (at most one).
-            if (supportRegexDuplicateNamedCaptureGroups && lastCompletedGroupDepth > 0 && c !== $$QMARK_3F) {
-              while (regexGroupQuantified.length <= lastCompletedGroupDepth) regexGroupQuantified.push(false);
-              regexGroupQuantified[lastCompletedGroupDepth] = true;
-            }
-            lastCompletedGroupDepth = 0;
             afterAtom = false;
             if (neof()) {
               if (peeky($$QMARK_3F)) {
@@ -2904,8 +2916,6 @@ function Lexer(
           let wasFixableAssertion = false;
           // lookbehind `(?<=` and `(?<!` can not get quantified even under webcompat flag (too new)
           let wasUnfixableAssertion = false;
-          let wasNegativeAssertion = false; // (?! or (?<! — capture can't participate with main; (?= and (?<= can
-
           // parse group (?: (!: (
           ASSERT_skip($$PAREN_L_28);
           afterAtom = false; // useless. just in case
@@ -2939,7 +2949,6 @@ function Lexer(
                   // (?<= (?<!
                   ASSERT_skip(c);
                   wasUnfixableAssertion = true;
-                  wasNegativeAssertion = (c === $$EXCL_21);
                 }
                 else if (!supportRegexNamedGroups) {
                   ASSERT_skip(c);
@@ -2962,7 +2971,6 @@ function Lexer(
                 // (?= (?!
                 ASSERT_skip(c);
                 wasFixableAssertion = true; // lookahead assertion might only be quantified without u-flag and in webcompat mode
-                wasNegativeAssertion = (c === $$EXCL_21);
               }
 
               if (eof()) {
@@ -2975,7 +2983,7 @@ function Lexer(
               if (eof()) return regexSyntaxError('Encountered early EOF');
               c = peek();
               let subbad = _parseRegexBody(c, groupLevel + 1, REGEX_ALWAYS_GOOD);
-              if (supportRegexDuplicateNamedCaptureGroups) lastCompletedGroupDepth = groupLevel + 1;
+
               afterAtom = true;
               if (subbad === REGEX_ALWAYS_BAD) {
                 uflagStatus = REGEX_ALWAYS_BAD;
@@ -2994,9 +3002,7 @@ function Lexer(
           }
 
           if (supportRegexDuplicateNamedCaptureGroups) regexBranchPath.push(0);
-          if (supportRegexDuplicateNamedCaptureGroups && wasNegativeAssertion) regexNegativeAssertionDepth++;
           let subbad = _parseRegexBody(c, groupLevel + 1, REGEX_ALWAYS_GOOD);
-          if (supportRegexDuplicateNamedCaptureGroups && wasNegativeAssertion) regexNegativeAssertionDepth--;
           if (supportRegexDuplicateNamedCaptureGroups) regexBranchPath.pop();
 
           if (eof()) {
@@ -3011,7 +3017,6 @@ function Lexer(
           }
 
           afterAtom = true;
-          if (supportRegexDuplicateNamedCaptureGroups) lastCompletedGroupDepth = groupLevel + 1;
           if (subbad === REGEX_ALWAYS_BAD) {
             uflagStatus = REGEX_ALWAYS_BAD; // should already have THROWn for this
           } else if (subbad === REGEX_GOOD_SANS_UV_FLAG) {
@@ -3039,7 +3044,7 @@ function Lexer(
             uflagStatus = updateRegexUflagIsMandatory(uflagStatus, lastPotentialRegexError);
           }
           afterAtom = true;
-          lastCompletedGroupDepth = 0;
+
           break;
 
         case REGEX_ATOM_SQUARER: {
@@ -3050,7 +3055,7 @@ function Lexer(
           }
           uflagStatus = updateRegexUflagIsIllegal(uflagStatus, reason);
           afterAtom = true;
-          lastCompletedGroupDepth = 0;
+
           break;
         }
 
@@ -3058,7 +3063,6 @@ function Lexer(
           // atom escape is different from charclass escape
           ASSERT_skip($$BACKSLASH_5C);
           afterAtom = true; // except in certain cases...
-          lastCompletedGroupDepth = 0;
 
           if (eof()) {
             return regexSyntaxError('Early EOF');
@@ -3127,7 +3131,7 @@ function Lexer(
           // atom; match one character. Beyond 2028 2029, atoms with non-ascii chars are not special
           ASSERT_skip(c); // this ought to be a valid regex source character, even if just half a surrogate pair
           afterAtom = true;
-          lastCompletedGroupDepth = 0;
+
           break;
 
         case REGEX_ATOM_CURLYL: {
@@ -3156,11 +3160,6 @@ function Lexer(
               //    ^^^^^
               // `/a{12,13}/`
               //    ^^^^^^^
-              if (supportRegexDuplicateNamedCaptureGroups && lastCompletedGroupDepth > 0) {
-                while (regexGroupQuantified.length <= lastCompletedGroupDepth) regexGroupQuantified.push(false);
-                regexGroupQuantified[lastCompletedGroupDepth] = true;
-              }
-              lastCompletedGroupDepth = 0;
               afterAtom = false;
 
               if (neof() && peeky($$QMARK_3F)) {
@@ -3224,7 +3223,7 @@ function Lexer(
           // [v]: `/{?/u`
 
           afterAtom = true;
-          lastCompletedGroupDepth = 0;
+
           uflagStatus = updateRegexUflagIsIllegal(uflagStatus, 'Found an unescaped `{` that was not the start of a valid quantifier');
           break;
         }
@@ -3239,7 +3238,7 @@ function Lexer(
           uflagStatus = updateRegexUflagIsIllegal(uflagStatus, reason);
           // in web compat mode this case is treated as an extended atom
           afterAtom = true;
-          lastCompletedGroupDepth = 0;
+
           break;
         }
 
@@ -3375,7 +3374,7 @@ function Lexer(
         if (supportRegexDuplicateNamedCaptureGroups) {
           // ES2025: collect (path, position, inAssertion); MightBothParticipate check is deferred until after body parse (so we see quantifiers).
           let path = regexBranchPath.slice();
-          let entry = { path, pointerStart, pointerEnd: pointer - 1, inNegativeAssertion: regexNegativeAssertionDepth > 0 };
+          let entry = { path, pointerStart, pointerEnd: pointer - 1 };
           let entries = declaredGroupNamesWithPath.get(lastCanonizedInput);
           if (!entries) {
             entries = [];
@@ -3468,26 +3467,25 @@ function Lexer(
 
     // [v]: `/(?<輸rest>foo)/u`
     //           ^
-    // The first character is a valid ident start, however, it only is as a code point which is only the case
-    // when u-flag is present. Without u-flag the pair is treated as two individual characters and the surrogate
-    // head is not a valid ident char. As such the group name fails to parse. There are two outcomes now; if the
-    // name was for a capturing group then this is an unrecoverable error because the regex would need to interpret
-    // the start of the group as `(?`, which wants to quantify an atom, except `(` is never allowed to be an atom.
-    // However, if this was the name for a `\k` escape, then in web compat mode it can end up as atoms for the
-    // `\k` escape and the `<`. So we need to check the forCapturing state.
+    // The character is a valid ident start/rest as a codepoint (surrogate pair in the source).
+    // Since ES2020 (tc39/ecma262#1869), the spec allows this without u-flag via:
+    // RegExpIdentifierStart[~UnicodeMode] :: UnicodeLeadSurrogate UnicodeTrailSurrogate
+    // Before ES2020, the surrogate pair was only valid with u-flag.
 
+    // c is just the high surrogate from peek(); read the full codepoint before advancing past the pair
+    let cp = input.codePointAt(pointer);
     skipFastWithoutUpdatingCache();
     skip();
-    lastCanonizedInput += String.fromCodePoint(c);
+    lastCanonizedInput += String.fromCodePoint(cp);
 
-    if (forCapturing === FOR_NAMED_GROUP) {
-      // Error without u-flag because even in webcompat it leads to `(?` which is an illegal quantifier
-      return updateRegexUflagIsMandatory(uflagStatus, 'The start of the name of a capturing group had a surrogate pair and is therefor only valid with u-flag or v-flag');
-    }
-
-    if (webCompat === WEB_COMPAT_OFF) {
-      // This case can only made to work in web compat mode because that allows `\k` to be an atom
-      return updateRegexUflagIsMandatory(uflagStatus, 'The start of a `\\k` group name had a surrogate pair and is therefor only valid with u-flag or v-flag'); // Let's not promote web compat
+    if (!supportRegexGroupNameUnicodeEscapes) {
+      // Pre-ES2020: surrogate pairs in group names require u-flag
+      if (forCapturing === FOR_NAMED_GROUP) {
+        return updateRegexUflagIsMandatory(uflagStatus, 'The start of the name of a capturing group had a surrogate pair and is therefor only valid with u-flag or v-flag');
+      }
+      if (webCompat === WEB_COMPAT_OFF) {
+        return updateRegexUflagIsMandatory(uflagStatus, 'The start of a `\\k` group name had a surrogate pair and is therefor only valid with u-flag or v-flag');
+      }
     }
 
     return uflagStatus;
@@ -3574,14 +3572,18 @@ function Lexer(
     let c = peek(); // dont read. we dont want to consume a bad \n here
     if (c === $$CURLY_L_7B) {
       c = parseUnicodeRubyEscape();
-
-      // If this is part of a `\k` escape then this might be ok without u-flag in web compat, otherwise it must be error
-      uflagStatus = updateRegexUflagIsMandatory(REGEX_ALWAYS_GOOD, 'Found a unicode ruby escape which is only valid with u-flag or v-flag'); // don't mention the webcompat exception
+      // Since ES2020 (tc39/ecma262#1869), group name escapes use RegExpUnicodeEscapeSequence[+UnicodeMode],
+      // so ruby escapes (\u{...}) are valid in group names even without u-flag.
+      // Before ES2020, ruby escapes in group names required u-flag.
+      if (!supportRegexGroupNameUnicodeEscapes) {
+        uflagStatus = updateRegexUflagIsMandatory(REGEX_ALWAYS_GOOD, 'Found a unicode ruby escape which is only valid with u-flag or v-flag');
+      }
     } else {
       c = parseUnicodeQuadEscape(c, false);
-
-      if (c > 0xffff && forCapturing === FOR_NAMED_GROUP) {
-        // The double quad can be made to work without u-flag but not inside a capturing group because `(?` is invalid
+      // Since ES2020 (tc39/ecma262#1869), group name escapes use RegExpUnicodeEscapeSequence[+UnicodeMode],
+      // so double-quad surrogate pairs are valid in group names even without u-flag.
+      // Before ES2020, double-quad surrogate pairs in capturing group names required u-flag.
+      if (!supportRegexGroupNameUnicodeEscapes && c > 0xffff && forCapturing === FOR_NAMED_GROUP) {
         uflagStatus = updateRegexUflagIsMandatory(uflagStatus, 'The name of a capturing group contained a double unicode quad escape which is valid as a surrogate pair which requires u-flag or v-flag and which cannot be made valid without u-flag or v-flag');
       }
     }
@@ -3637,20 +3639,23 @@ function Lexer(
       // [v]: `/(?<輸>x)\k<\ud87e\udddf>)/u`
       // [x]: `/(?<輸>x)\k<\u{2F9DF}>)/`       Webcompat only (where `\k` is a valid atom)
       // [v]: `/(?<輸>x)\k<\u{2F9DF}>)/u`
-      if (forCapturing === FOR_NAMED_GROUP) {
+      // Since ES2020 (tc39/ecma262#1869), group name escapes use RegExpUnicodeEscapeSequence[+UnicodeMode],
+      // so surrogate pair escapes representing valid identifier chars are valid without u-flag.
+      // Before ES2020, these required u-flag.
+      if (!supportRegexGroupNameUnicodeEscapes) {
         // Only for named groups is this a problem because either way (double quad or ruby) the escape cannot
         // contribute a valid ident char to the group name, meaning the group name fails to parse, meaning the
         // interpretation of this part falls back to legacy atoms in web compat mode, and just fails otherwise
-        return updateRegexUflagIsMandatory(uflagStatus, 'Found a codepoint in a capturing group name that requires the u-flag or v-flag to be considered valid');
-      }
-
-      if (webCompat === WEB_COMPAT_OFF) {
+        if (forCapturing === FOR_NAMED_GROUP) {
+          return updateRegexUflagIsMandatory(uflagStatus, 'Found a codepoint in a capturing group name that requires the u-flag or v-flag to be considered valid');
+        }
         // This is a `\k` escape, which can recover from a high codepoint, but only in webcompat mode. In that case
         // the `\k` and `\u` become individual atoms. A quad becomes a trivial atom while a ruby becomes a quantifier
         // like `\u{50000}` in webcompat mode is the letter `u` repeated 50000 times. Otherwise it's still an error.
-        return updateRegexUflagIsMandatory(uflagStatus, 'Found a codepoint in a `\\k` escape group name that requires the u-flag or v-flag to be considered valid');
+        if (webCompat === WEB_COMPAT_OFF) {
+          return updateRegexUflagIsMandatory(uflagStatus, 'Found a codepoint in a `\\k` escape group name that requires the u-flag or v-flag to be considered valid');
+        }
       }
-
       return uflagStatus;
     }
 
@@ -3994,11 +3999,13 @@ function Lexer(
     let literalRbracketJustAdded = false; // ] just consumed as literal (v mode)
     let closeBothOnNextRbracket = false; // next ] at depth 2 closes inner and outer (e.g. [][] )
     let seenContentAtCurrentDepth = false; // any non-[ atom since last bracketDepth++; used for "one ] closes all"
+    regexCurrentCharClassIsNegated = false;
     if (c === $$XOR_5E) { // the separate inverting caret check is important for surrogate range checks in super edge cases (there's a test)
       ASSERT_skip($$XOR_5E);
       if (eof()) return regexSyntaxError('Encountered early EOF while parsing char class (2)');
       c = peek();
       hasClassContent = true; // [^] is not empty (negated class)
+      regexCurrentCharClassIsNegated = true;
     }
 
     // With u-flag, a surrogate pair encoded as double unicode quad escapes must be consumed as one char. Without
@@ -5064,6 +5071,8 @@ function Lexer(
     ASSERT(c === $$P_70 || c === $$P_UC_50, 'this should be \\p or \\P', c);
     ASSERT(peek() === c, 'not yet consumed');
 
+    let isNegated = c === $$P_UC_50; // \P vs \p
+
     // introduced in ES9 / ES2018; https://github.com/tc39/proposal-regexp-unicode-property-escapes
     if (!supportRegexPropertyEscapes) {
       let uflagState = updateRegexUflagIsIllegal(REGEX_ALWAYS_GOOD, 'Property escapes are not supported by the currently targeted language version');
@@ -5229,7 +5238,7 @@ function Lexer(
 
       // Validate value against general category values and script values
       let vc = ',' + value + ',';
-      if (!TABLE_GEN_CAT_VALUES.includes(vc) && !TABLE_SCRIPT_VALUES.includes(vc)) {
+      if (!TABLE_GEN_CAT_VALUES.includes(vc) && !getTableScriptValues().includes(vc)) {
         if (webCompat === WEB_COMPAT_ON) {
           return updateRegexUflagIsIllegal(REGEX_ALWAYS_GOOD, 'The escaped property value `' + value + '` is not valid (does not appear in "table-unicode-general-category-values" nor "table-unicode-script-values")')
         }
@@ -5260,9 +5269,13 @@ function Lexer(
     // "Table 58": https://tc39.es/ecma262/#table-binary-unicode-properties
     // "Table 59": https://tc39.es/ecma262/#table-unicode-general-category-values
 
-    // RGI_Emoji is valid only with v-flag (unicode sets), not with u-flag. Defer error until flags are known.
-    if (name === 'RGI_Emoji') {
-      regexBodyHasRgiEmoji = true;
+    // Properties of strings (Basic_Emoji, RGI_Emoji, etc.) are only valid with v-flag, not u-flag.
+    // https://tc39.es/ecma262/#table-binary-unicode-properties-of-strings
+    // \P{...} (negated) is always an error for properties of strings.
+    // Defer the u/v check until flags are known.
+    if (TABLE_PROPS_OF_STRINGS.includes(nc)) {
+      if (isNegated || (fromCharClass && regexCurrentCharClassIsNegated)) regexBodyHasNegatedPropOfStrings = true;
+      else regexBodyHasPropOfStrings = true;
       ASSERT_skip($$CURLY_R_7D);
       return REGEX_ALWAYS_GOOD;
     }
