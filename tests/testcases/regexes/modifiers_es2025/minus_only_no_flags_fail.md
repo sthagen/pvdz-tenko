@@ -33,7 +33,7 @@ Parsed with script goal and as if the code did not start with strict mode header
 
 `````
 throws: Lexer error!
-    Regex: Modifier group: second flag set cannot be empty after `-`
+    Regex: Modifier group: both flag sets cannot be empty around `-`
 
 start@1:0, error@1:0
 ╔══╦════════════════

@@ -41,7 +41,9 @@ const COMPARE_ACORN = process.argv.includes('--test-acorn'); // compare Tenko ou
 const BABEL_AST = process.argv.includes('--babel'); // run Tenko with babelCompat=true?
 const COMPARE_BABEL = process.argv.includes('--test-babel'); // compare Tenko output for each test with Babel output?
 let TARGET_FILE = (process.argv.includes('-f') && process.argv[process.argv.indexOf('-f') + 1]) || '';
+let SKIP_TO = (process.argv.includes('--skip') && parseInt(process.argv[process.argv.indexOf('--skip') + 1], 10)) || 0;
 
+if (SKIP_TO) console.log('Skipping to test index ' + SKIP_TO);
 if (ACORN_AST) console.log('Generating an Acorn compatible AST for all tests');
 if (BABEL_AST) console.log('Generating a Babel compatible AST for all tests');
 if (COMPARE_ACORN) console.log('Comparing to Acorn output');
@@ -75,7 +77,7 @@ let Tenko = function(){ throw new Error('not yet loaded through import...'); };
 const PATH262 = path.join(dirname, './../ignore/test262/test');
 
 let stdout = [];
-function parse(input, strict, module, annexB) {
+function parse(input, strict, module, annexB, allowUsingDeclaration) {
   stdout = [];
   return Tenko(
     input,
@@ -86,6 +88,7 @@ function parse(input, strict, module, annexB) {
       webCompat: !!annexB,
       acornCompat: ACORN_AST,
       babelCompat: BABEL_AST,
+      allowUsingDeclaration: !!allowUsingDeclaration,
 
       errorCodeFrame: true,
       truncCodeFrame: false,
@@ -115,7 +118,7 @@ let compareFails = new Set;
 let compareSkips = new Set;
 function onRead(file, content) {
   ++counter;
-  // if (counter < 22000) return;
+  if (SKIP_TO && counter < SKIP_TO) return;
 
   let ignorePrefix = path.resolve(dirname, '../ignore') + '/';
   let displayFile = file.startsWith(ignorePrefix) ? file.slice(ignorePrefix.length) : path.relative('.', file);
@@ -147,6 +150,23 @@ function onRead(file, content) {
   let negative = /\n\s*negative:/.test(header) && !/\n\s*phase:\s*runtime/.test(header) && !header.includes('phase: resolution');
   let webcompat = file.includes('annexB');
 
+  // Skip tests for features that are not yet Stage 4 (not part of the ES standard)
+  // Remove entries from this set as Tenko gains support for them
+  const SKIP_FEATURES = new Set([
+    'decorators',                       // Stage 3
+    'import-defer',                     // Stage 2.7
+    'source-phase-imports',             // Stage 3
+    'source-phase-imports-module-source', // Stage 3
+    // Note: explicit-resource-management (using/await using) is handled as a special case below
+  ]);
+  let skipFeature = features.find(f => SKIP_FEATURES.has(f));
+  if (skipFeature) {
+    return console.log(BOLD, 'SKIP', RESET, '(not yet stage 4: ' + skipFeature + ')');
+  }
+
+  // explicit-resource-management (using/await using) is behind a flag in Tenko, enable it when test requires it
+  let useUsing = features.includes('explicit-resource-management');
+
   let printedOnce = false;
   if (!flags.includes('onlyStrict') && !flags.includes('module')) {
     // This is the sloppy or web run (governed by the test config!)
@@ -154,7 +174,7 @@ function onRead(file, content) {
     let failed = false;
     let z;
     try {
-      z = parse(content, false, false, webcompat);
+      z = parse(content, false, false, webcompat, useUsing);
       console.log(GREEN, 'PASS', RESET, 'sloppy, webcompat=', webcompat);
     } catch (e) {
       console.log(GREEN, 'FAIL', RESET, 'sloppy, webcompat=', webcompat);
@@ -274,7 +294,7 @@ function onRead(file, content) {
     let failed = false;
     let z;
     try {
-      z = parse(content, true, flags.includes('module'), webcompat);
+      z = parse(content, true, flags.includes('module'), webcompat, useUsing);
       console.log(GREEN, 'PASS', RESET, modstr + ', webcompat=', webcompat);
     } catch (e) {
       console.log(GREEN, 'FAIL', RESET, modstr + ', webcompat=', webcompat);

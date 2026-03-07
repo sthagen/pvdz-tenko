@@ -135,6 +135,7 @@ import {
   LF_CHAINING,
   LF_NOT_IN_FUNC,
   LF_IN_CLASS_FIELD_INIT,
+  LF_IN_STATIC_BLOCK,
 
   L,
 } from './lexerflags.mjs';
@@ -455,6 +456,7 @@ import {
   PIGGY_BACK_WAS_CONSTRUCTOR,
   PIGGY_BACK_WAS_PROTO,
   PIGGY_BACK_WAS_ARROW,
+  PIGGY_BACK_WAS_PRIVATE_IDENT,
   NO_SPREAD,
   LAST_SPREAD,
   MID_SPREAD,
@@ -1399,7 +1401,7 @@ function Parser(code, options = {}) {
       }
     }
   }
-  function AST_throwIfIllegalUpdateArg(astProp) {
+  function AST_throwIfIllegalUpdateArg(lexerFlags, astProp) {
     ASSERT(AST_throwIfIllegalUpdateArg.length === arguments.length, 'arg count');
     ASSERT(typeof astProp === 'string', 'astprop string');
 
@@ -1409,6 +1411,10 @@ function Parser(code, options = {}) {
     let head = _path[_path.length - 1];
     let prev = head && head[astProp];
 
+    // Annex B: In sloppy+webcompat, CallExpression is a valid update target (runtime error, not syntax error)
+    // https://tc39.es/ecma262/#sec-runtime-errors-for-function-call-assignment-targets
+    let allowCall = hasNoFlag(lexerFlags, LF_STRICT_MODE) && options_webCompat === WEB_COMPAT_ON;
+
     // Note: the for-case is nasty because when parsing the lhs the AST is not yet populated with a `for` statement
     // because that particular node type depends on `in`, `of`, or a semi. So the AST could be an array (block body)
     if (
@@ -1416,16 +1422,16 @@ function Parser(code, options = {}) {
       (
         prev instanceof Array ?
           // - `for (x--;;);`
-          !prev.length || (prev[prev.length - 1].type !== 'Identifier' && prev[prev.length - 1].type !== 'MemberExpression') :
+          !prev.length || (prev[prev.length - 1].type !== 'Identifier' && prev[prev.length - 1].type !== 'MemberExpression' && !(allowCall && prev[prev.length - 1].type === 'CallExpression')) :
           // - `[]++`
-          (prev.type !== 'Identifier' && prev.type !== 'MemberExpression')
+          (prev.type !== 'Identifier' && prev.type !== 'MemberExpression' && !(allowCall && prev.type === 'CallExpression'))
       )
     ) {
       // - `++[]`
-      // - `--f()`
+      // - `--f()`      (strict or no webcompat)
       // - `++this`
       // - `[]++`
-      // - `f()--`
+      // - `f()--`      (strict or no webcompat)
       // - `this++`
       return THROW_RANGE('Can only increment or decrement an identifier or member expression', tok_getStart(), tok_getStop());
     }
@@ -4249,6 +4255,12 @@ function Parser(code, options = {}) {
       return THROW_RANGE('Cannot `await` as the arg of `new`', $tp_await_start, $tp_await_stop);
     }
 
+    if (hasAllFlags(lexerFlags, LF_IN_STATIC_BLOCK)) {
+      // - `class C { static { await 0; } }`
+      // - `async function f() { class C { static { await 0; } } }`
+      return THROW_RANGE('Cannot use `await` in a static block', $tp_await_start, $tp_await_stop);
+    }
+
     if (hasAllFlags(lexerFlags, LF_IN_FUNC_ARGS)) {
       // Illegal without arg (would already fail for that reason alone)
       // - `function f(x = await){}`
@@ -4374,7 +4386,11 @@ function Parser(code, options = {}) {
   function parseStaticBlock(lexerFlags, astProp, enclosingScoop) {
     ASSERT(parseStaticBlock.length === arguments.length, 'arg count');
     ASSERT(tok_getType() === $PUNC_CURLY_OPEN, 'static block must start with {');
-    let lexerFlagsNoTemplate = sansFlag(lexerFlags, LF_IN_TEMPLATE | LF_NO_ASI);
+    // ClassStaticBlockStatementList: StatementList[~Yield, +Await, ~Return]
+    // The +Await means `await` is a keyword (cannot be used as identifier/binding/label).
+    // Additionally: "It is a Syntax Error if ContainsAwait of ClassStaticBlockStatementList is true."
+    // So `await expr` is also disallowed. LF_IN_ASYNC makes `await` a keyword, LF_IN_STATIC_BLOCK rejects await expressions.
+    let lexerFlagsNoTemplate = sansFlag(lexerFlags, LF_IN_TEMPLATE | LF_NO_ASI) | LF_IN_ASYNC | LF_IN_STATIC_BLOCK;
     let $tp_curly_start = tok_getStart();
     let $tp_curly_line = tok_getLine();
     let $tp_curly_column = tok_getColumn();
@@ -5343,6 +5359,10 @@ function Parser(code, options = {}) {
       // - "Top-Level Await" contexts; which you leave once you go inside a function/arrow
       //   - so the second check asserts that TLA is enabled (TLA only applies with goal=module) and we are not inside any kind of function
       //   - note: if we're inside an async function then the first check already passes
+      // `for await` is never legal in a static block, even when inside an async function
+      if (hasAnyFlag(lexerFlags, LF_IN_STATIC_BLOCK)) {
+        return THROW_RANGE('Cannot use `for await` in a static block', $tp_for_start, $tp_await_stop);
+      }
       if (
         hasNoFlag(lexerFlags, LF_IN_ASYNC) &&
         !(allowToplevelAwait && goalMode === GOAL_MODULE && hasAnyFlag(lexerFlags, LF_NOT_IN_FUNC))
@@ -8185,6 +8205,12 @@ function Parser(code, options = {}) {
       assignable |= parseExpressionFromBinaryOpOnlyStronger(lexerFlags, $tp_rightExprStart_start, $tp_rightExprStart_line, $tp_rightExprStart_column, coalSeen,'right');
     }
 
+    // Spec: `PrivateIdentifier in ShiftExpression` — the RHS is ShiftExpression, not RelationalExpression.
+    // A bare PrivateIdentifier is not a valid ShiftExpression, so `#x in #y in z` is a SyntaxError.
+    if (hasAllFlags(assignable, PIGGY_BACK_WAS_PRIVATE_IDENT)) {
+      return THROW_RANGE('A PrivateIdentifier is not a valid RHS for `in`; the RHS of `PrivateIdentifier in` is ShiftExpression', $tp_rightExprStart_start, tok_getStart());
+    }
+
     // Can't parse `||` or `&&` _after_ `??` on same level so don't have to check this inside the loop
     preventNullishWithLogic(tok_getType(), tok_getStart(), tok_getStop(), coalSeen);
 
@@ -8770,7 +8796,8 @@ function Parser(code, options = {}) {
         if (!allowPrivateClassFields) {
           return THROW_RANGE('Private identifier (as in `#x in obj`) is not supported in the currently targeted language version', $tp_ident_start, $tp_ident_stop);
         }
-        if (bindingType !== BINDING_TYPE_NONE) {
+        if (bindingType !== BINDING_TYPE_NONE && bindingType !== BINDING_TYPE_ARG) {
+          // BINDING_TYPE_ARG is allowed because `(#x in obj)` is valid inside a group that might be arrow params
           return THROW_RANGE('Private identifier is only valid as the left-hand side of an `in` expression', $tp_ident_start, $tp_ident_stop);
         }
         // Standalone #x is only valid when immediately followed by `in` (e.g. #x in obj)
@@ -8783,7 +8810,7 @@ function Parser(code, options = {}) {
         // Record use for AllPrivateIdentifiersValid check
         usePrivateName($tp_ident_canon, $tp_ident_start, $tp_ident_stop);
         AST_setNode(astProp, AST_getPrivateIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon));
-        return NOT_ASSIGNABLE;
+        return NOT_ASSIGNABLE | PIGGY_BACK_WAS_PRIVATE_IDENT;
     }
 
     // - `x` but not `true`
@@ -9181,7 +9208,7 @@ function Parser(code, options = {}) {
     let assignable = parseValue(lexerFlags, ASSIGN_EXPR_IS_ERROR, NOT_NEW_ARG, NOT_LHSE, 'argument');
     assignable = parseValueTail(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, assignable, NOT_NEW_ARG, ONLY_LHSE, 'argument');
 
-    AST_throwIfIllegalUpdateArg('argument');
+    AST_throwIfIllegalUpdateArg(lexerFlags, 'argument');
 
     AST_close($tp_punc_start, $tp_punc_line, $tp_punc_column, 'UpdateExpression');
 
@@ -9779,7 +9806,10 @@ function Parser(code, options = {}) {
     assignable = mergeAssignable(nowAssignable, assignable);
     AST_close($tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, 'CallExpression');
 
-    return parseValueTail(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, setNotAssignable(assignable), isNewArg, NOT_LHSE, astProp);
+    // Annex B: In sloppy+webcompat mode, a CallExpression is a valid assignment target (runtime error, not syntax error)
+    // https://tc39.es/ecma262/#sec-runtime-errors-for-function-call-assignment-targets
+    let callAssignable = (hasNoFlag(lexerFlags, LF_STRICT_MODE) && options_webCompat === WEB_COMPAT_ON) ? assignable : setNotAssignable(assignable);
+    return parseValueTail(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, callAssignable, isNewArg, NOT_LHSE, astProp);
   }
   function _parseValueTailTemplate(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, assignable, isNewArg, astProp) {
     ASSERT(_parseValueTailTemplate.length === arguments.length, 'arg count');
@@ -9890,7 +9920,7 @@ function Parser(code, options = {}) {
       return THROW_RANGE('Cannot postfix `' + opName + '` a non-assignable value', $tp_op_start, $tp_op_stop);
     }
 
-    AST_throwIfIllegalUpdateArg(astProp);
+    AST_throwIfIllegalUpdateArg(lexerFlags, astProp);
 
     ASSERT_skipDiv(opName, lexerFlags);
 
@@ -10014,9 +10044,12 @@ function Parser(code, options = {}) {
       });
     }
 
-    ASSERT_skipToExpressionStart($PUNC_PAREN_OPEN, lexerFlags); // The arg to dynamic import is mandatory and an arbitrary expr
+    // Inside import() parens we are no longer in the for-header LHS context; e.g. `for (import('x' in {});_;_);`
+    let importLexerFlags = sansFlag(lexerFlags, LF_IN_FOR_LHS);
 
-    let assignable = parseExpression(lexerFlags, acornCompat ? 'source' : 'arguments');
+    ASSERT_skipToExpressionStart($PUNC_PAREN_OPEN, importLexerFlags); // The arg to dynamic import is mandatory and an arbitrary expr
+
+    let assignable = parseExpression(importLexerFlags, acornCompat ? 'source' : 'arguments');
 
     if (tok_getType() === $PUNC_COMMA) {
       // Optional second argument for import attributes: import('x', { with: { type: 'json' } })
@@ -10024,17 +10057,17 @@ function Parser(code, options = {}) {
         return THROW_RANGE('Dynamic `import` only expected exactly one argument and does not allow for a trailing comma', $tp_import_start, tok_getStop());
       }
 
-      ASSERT_skipAny($PUNC_COMMA, lexerFlags);
+      ASSERT_skipAny($PUNC_COMMA, importLexerFlags);
 
       if (tok_getType() === $PUNC_PAREN_CLOSE) {
         // import('x',) -- trailing comma after first arg, no second arg
         // That's fine, do nothing
       } else {
-        assignable = parseExpression(lexerFlags, acornCompat ? 'options' : 'arguments');
+        assignable = parseExpression(importLexerFlags, acornCompat ? 'options' : 'arguments');
 
         // Allow trailing comma after second arg
         if (tok_getType() === $PUNC_COMMA) {
-          ASSERT_skipAny($PUNC_COMMA, lexerFlags);
+          ASSERT_skipAny($PUNC_COMMA, importLexerFlags);
         }
 
         if (tok_getType() !== $PUNC_PAREN_CLOSE) {
@@ -10044,12 +10077,6 @@ function Parser(code, options = {}) {
     }
 
     if (tok_getType() !== $PUNC_PAREN_CLOSE) {
-      // Error path
-
-      if (tok_getType() === $ID_in) {
-        return THROW_RANGE('The dynamic import syntax explicitly forbids the `in` operator', tok_getStart(), tok_getStop());
-      }
-
       // [x]: `import(a b)`
       return THROW_RANGE('The dynamic `import` argument was followed by unknown content', tok_getStart(), tok_getStop());
     }
@@ -11084,7 +11111,10 @@ function Parser(code, options = {}) {
         AST_patchAsyncCall($tp_async_start, $tp_async_stop, $tp_async_line, $tp_async_column, $tp_async_canon, astProp);
       }
 
-      let assignable = parseValueTail(lexerFlags, $tp_async_start, $tp_async_line, $tp_async_column, NOT_ASSIGNABLE, NOT_NEW_ARG, NOT_LHSE, astProp);
+      // Annex B: In sloppy+webcompat, a CallExpression is a valid assignment target (runtime error, not syntax error)
+      // https://tc39.es/ecma262/#sec-runtime-errors-for-function-call-assignment-targets
+      let asyncCallAssignable = (hasNoFlag(lexerFlags, LF_STRICT_MODE) && options_webCompat === WEB_COMPAT_ON) ? IS_ASSIGNABLE : NOT_ASSIGNABLE;
+      let assignable = parseValueTail(lexerFlags, $tp_async_start, $tp_async_line, $tp_async_column, asyncCallAssignable, NOT_NEW_ARG, NOT_LHSE, astProp);
       if (fromStmtOrExpr === IS_STATEMENT) {
         // in expressions operator precedence is handled elsewhere. in statements this is the start,
         assignable = parseExpressionFromOp(lexerFlags, $tp_async_start, $tp_async_stop, $tp_async_line, $tp_async_column, assignable, astProp);
@@ -11748,7 +11778,6 @@ function Parser(code, options = {}) {
       }
       let currentDestruct = parseObjectPart(lexerFlags, scoop, bindingType, exportedNames, exportedBindings, astProp);
       if (hasAnyFlag(currentDestruct, PIGGY_BACK_WAS_PROTO)) {
-        ASSERT(options_webCompat === WEB_COMPAT_ON, 'this piggy should not appear if the web compat flag wasnt set');
         currentDestruct &= ~PIGGY_BACK_WAS_PROTO; // Since the bit was set, this should unset it without further checks
 
         // https://tc39.github.io/ecma262/#sec-__proto__-property-names-in-object-initializers
@@ -12043,8 +12072,8 @@ function Parser(code, options = {}) {
       AST_setIdent(astProp, $tp_propLeadingIdent_start, $tp_propLeadingIdent_stop, $tp_propLeadingIdent_line, $tp_propLeadingIdent_column, $tp_propLeadingIdent_canon);
 
       let destructible = MIGHT_DESTRUCT;
-      if (options_webCompat === WEB_COMPAT_ON && $tp_propLeadingIdent_canon === '__proto__') {
-        // https://tc39.github.io/ecma262/#sec-__proto__-property-names-in-object-initializers
+      if ($tp_propLeadingIdent_canon === '__proto__') {
+        // https://tc39.es/ecma262/#sec-__proto__-property-names-in-object-initializers (Annex B.3.1, normative)
         // > "at least two of those entries were obtained from productions of the form PropertyDefinition : PropertyName : AssignmentExpression"
         destructible = PIGGY_BACK_WAS_PROTO;
       }
@@ -12689,10 +12718,10 @@ function Parser(code, options = {}) {
 
       let destructible_forPiggies = MIGHT_DESTRUCT;
 
-      // https://tc39.github.io/ecma262/#sec-__proto__-property-names-in-object-initializers
+      // https://tc39.es/ecma262/#sec-__proto__-property-names-in-object-initializers (Annex B.3.1, normative)
       // > "at least two of those entries were obtained from productions of the form PropertyDefinition : PropertyName : AssignmentExpression"
       // `{"__proto__": 1, __proto__: 2}` is still an error, only for key:value (not shorthand or methods)
-      if (options_webCompat === WEB_COMPAT_ON && $tp_lit_canon === '__proto__') {
+      if ($tp_lit_canon === '__proto__') {
         destructible_forPiggies |= PIGGY_BACK_WAS_PROTO;
       }
 
@@ -13266,6 +13295,37 @@ function Parser(code, options = {}) {
         //                   ^
         return _parseClassMethodIdentKey(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, false, $UNTYPED, $UNTYPED, $UNTYPED, $UNTYPED, $tp_static_start, $tp_static_stop, $tp_static_line, $tp_static_column, $tp_static_canon, astProp, false);
       }
+      if (tok_getType() === $PUNC_EQ) {
+        // The `static` ident here is an instance field name, not a modifier
+        // - `class x {static = 1;}`
+        //                    ^
+        if (!allowPublicClassFields) {
+          return THROW_RANGE('Class field initializers are not supported in the currently targeted language version', $tp_static_start, tok_getStop());
+        }
+        return parseClassField(lexerFlags, $tp_methodStart_line, $tp_methodStart_column, $tp_methodStart_start, false, $ID_static, $tp_static_start, $tp_static_stop, $tp_static_line, $tp_static_column, $tp_static_canon, astProp);
+      }
+      if (tok_getType() === $PUNC_SEMI || tok_getType() === $PUNC_CURLY_CLOSE) {
+        // The `static` ident here is an instance field name without initializer
+        // - `class x {static;}`
+        //                   ^
+        // - `class x {static}`
+        //                   ^
+        if (!allowPublicClassFields) {
+          return THROW_RANGE('Class field declarations without initializer are not supported in the currently targeted language version', $tp_static_start, tok_getStop());
+        }
+        checkClassFieldNameErrors(false, false, $tp_static_canon, $tp_static_start, $tp_static_stop);
+        let keyNode = AST_getIdentNode($tp_static_start, $tp_static_stop, $tp_static_line, $tp_static_column, $tp_static_canon);
+        AST_open(astProp, {
+          type: 'PropertyDefinition',
+          loc: undefined,
+          key: keyNode,
+          value: null,
+          computed: false,
+          static: false,
+        });
+        AST_close($tp_methodStart_start, $tp_methodStart_line, $tp_methodStart_column, 'PropertyDefinition');
+        return CANT_DESTRUCT;
+      }
     }
 
     // let destructible = MIGHT_DESTRUCT;
@@ -13596,6 +13656,14 @@ function Parser(code, options = {}) {
       AST_setNode(astProp, AST_getPrivateIdentNode($tp_key_start, $tp_key_stop, $tp_key_line, $tp_key_column, $tp_key_canon));
     } else {
       AST_setIdent(astProp, $tp_key_start, $tp_key_stop, $tp_key_line, $tp_key_column, $tp_key_canon);
+    }
+
+    if (isPrivateKey && $tp_key_canon === 'constructor') {
+      // - `class C { #constructor() {} }`               error
+      // - `class C { static #constructor() {} }`        error
+      // - `class C { static async * #constructor() {} }`  error
+      // ClassElementName : PrivateName ; It is a Syntax Error if StringValue of PrivateName is "#constructor"
+      return THROW_RANGE('Class methods may not be named `#constructor`', $tp_key_start, $tp_key_stop);
     }
 
     if (isStatic && !isPrivateKey && $tp_key_canon === 'prototype') {

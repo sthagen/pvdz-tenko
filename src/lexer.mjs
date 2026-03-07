@@ -92,6 +92,7 @@ import {
   $$IS_3D,
   $$GT_3E,
   $$QMARK_3F,
+  $$AT_40,
   $$SQUARE_L_5B,
   $$BACKSLASH_5C,
   $$SQUARE_R_5D,
@@ -445,13 +446,17 @@ const TABLE_BIN_UNI_PROPS = ',ASCII,ASCII_Hex_Digit,AHex,Alphabetic,Alpha,Any,As
 const TABLE_GEN_CAT_VALUES = ',Cased_Letter,LC,Close_Punctuation,Pe,Connector_Punctuation,Pc,Control,Cc,cntrl,Currency_Symbol,Sc,Dash_Punctuation,Pd,Decimal_Number,Nd,digit,Enclosing_Mark,Me,Final_Punctuation,Pf,Format,Cf,Initial_Punctuation,Pi,Letter,L,Letter_Number,Nl,Line_Separator,Zl,Lowercase_Letter,Ll,Mark,M,Combining_Mark,Math_Symbol,Sm,Modifier_Letter,Lm,Modifier_Symbol,Sk,Nonspacing_Mark,Mn,Number,N,Open_Punctuation,Ps,Other,C,Other_Letter,Lo,Other_Number,No,Other_Punctuation,Po,Other_Symbol,So,Paragraph_Separator,Zp,Private_Use,Co,Punctuation,P,punct,Separator,Z,Space_Separator,Zs,Spacing_Mark,Mc,Surrogate,Cs,Symbol,S,Titlecase_Letter,Lt,Unassigned,Cn,Uppercase_Letter,Lu,';
 // Script values are split by Unicode version so they can be gated by targetEsVersion
 // Base table: Unicode 12.0 (ES2020, version 11)
-const TABLE_SCRIPT_VALUES_BASE = ',Adlam,Adlm,Ahom,Anatolian_Hieroglyphs,Hluw,Arabic,Arab,Armenian,Armn,Avestan,Avst,Balinese,Bali,Bamum,Bamu,Bassa_Vah,Bass,Batak,Batk,Bengali,Beng,Bhaiksuki,Bhks,Bopomofo,Bopo,Brahmi,Brah,Braille,Brai,Buginese,Bugi,Buhid,Buhd,Canadian_Aboriginal,Cans,Carian,Cari,Caucasian_Albanian,Aghb,Chakma,Cakm,Cham,Cherokee,Cher,Common,Zyyy,Coptic,Copt,Qaac,Cuneiform,Xsux,Cypriot,Cprt,Cyrillic,Cyrl,Deseret,Dsrt,Devanagari,Deva,Dogra,Dogr,Duployan,Dupl,Egyptian_Hieroglyphs,Egyp,Elbasan,Elba,Elymaic,Elym,Ethiopic,Ethi,Georgian,Geor,Glagolitic,Glag,Gothic,Goth,Grantha,Gran,Greek,Grek,Gujarati,Gujr,Gunjala_Gondi,Gong,Gurmukhi,Guru,Han,Hani,Hangul,Hang,Hanifi_Rohingya,Rohg,Hanunoo,Hano,Hatran,Hatr,Hebrew,Hebr,Hiragana,Hira,Imperial_Aramaic,Armi,Inherited,Zinh,Qaai,Inscriptional_Pahlavi,Phli,Inscriptional_Parthian,Prti,Javanese,Java,Kaithi,Kthi,Kannada,Knda,Katakana,Kana,Kayah_Li,Kali,Kharoshthi,Khar,Khmer,Khmr,Khojki,Khoj,Khudawadi,Sind,Lao,Laoo,Latin,Latn,Lepcha,Lepc,Limbu,Limb,Linear_A,Lina,Linear_B,Linb,Lisu,Lycian,Lyci,Lydian,Lydi,Mahajani,Mahj,Makasar,Maka,Malayalam,Mlym,Mandaic,Mand,Manichaean,Mani,Marchen,Marc,Medefaidrin,Medf,Masaram_Gondi,Gonm,Meetei_Mayek,Mtei,Mende_Kikakui,Mend,Meroitic_Cursive,Merc,Meroitic_Hieroglyphs,Mero,Miao,Plrd,Modi,Mongolian,Mong,Mro,Mroo,Multani,Mult,Myanmar,Mymr,Nabataean,Nbat,Nandinagari,Nand,New_Tai_Lue,Talu,Newa,Nko,Nkoo,Nushu,Nshu,Nyiakeng_Puachue_Hmong,Hmnp,Ogham,Ogam,Ol_Chiki,Olck,Old_Hungarian,Hung,Old_Italic,Ital,Old_North_Arabian,Narb,Old_Permic,Perm,Old_Persian,Xpeo,Old_Sogdian,Sogo,Old_South_Arabian,Sarb,Old_Turkic,Orkh,Oriya,Orya,Osage,Osge,Osmanya,Osma,Pahawh_Hmong,Hmng,Palmyrene,Palm,Pau_Cin_Hau,Pauc,Phags_Pa,Phag,Phoenician,Phnx,Psalter_Pahlavi,Phlp,Rejang,Rjng,Runic,Runr,Samaritan,Samr,Saurashtra,Saur,Sharada,Shrd,Shavian,Shaw,Siddham,Sidd,SignWriting,Sgnw,Sinhala,Sinh,Sogdian,Sogd,Sora_Sompeng,Sora,Soyombo,Soyo,Sundanese,Sund,Syloti_Nagri,Sylo,Syriac,Syrc,Tagalog,Tglg,Tagbanwa,Tagb,Tai_Le,Tale,Tai_Tham,Lana,Tai_Viet,Tavt,Takri,Takr,Tamil,Taml,Tangut,Tang,Telugu,Telu,Thaana,Thaa,Thai,Tibetan,Tibt,Tifinagh,Tfng,Tirhuta,Tirh,Ugaritic,Ugar,Vai,Vaii,Wancho,Wcho,Warang_Citi,Wara,Yi,Yiii,Zanabazar_Square,Zanb,';
+const TABLE_SCRIPT_VALUES_BASE = ',Adlam,Adlm,Ahom,Anatolian_Hieroglyphs,Hluw,Arabic,Arab,Armenian,Armn,Avestan,Avst,Balinese,Bali,Bamum,Bamu,Bassa_Vah,Bass,Batak,Batk,Bengali,Beng,Bhaiksuki,Bhks,Bopomofo,Bopo,Brahmi,Brah,Braille,Brai,Buginese,Bugi,Buhid,Buhd,Canadian_Aboriginal,Cans,Carian,Cari,Caucasian_Albanian,Aghb,Chakma,Cakm,Cham,Cherokee,Cher,Common,Zyyy,Coptic,Copt,Qaac,Cuneiform,Xsux,Cypriot,Cprt,Cyrillic,Cyrl,Deseret,Dsrt,Devanagari,Deva,Dogra,Dogr,Duployan,Dupl,Egyptian_Hieroglyphs,Egyp,Elbasan,Elba,Elymaic,Elym,Ethiopic,Ethi,Georgian,Geor,Glagolitic,Glag,Gothic,Goth,Grantha,Gran,Greek,Grek,Gujarati,Gujr,Gunjala_Gondi,Gong,Gurmukhi,Guru,Han,Hani,Hangul,Hang,Hanifi_Rohingya,Rohg,Hanunoo,Hano,Hatran,Hatr,Hebrew,Hebr,Hiragana,Hira,Imperial_Aramaic,Armi,Inherited,Zinh,Qaai,Inscriptional_Pahlavi,Phli,Inscriptional_Parthian,Prti,Javanese,Java,Kaithi,Kthi,Kannada,Knda,Katakana,Kana,Kayah_Li,Kali,Kharoshthi,Khar,Khmer,Khmr,Khojki,Khoj,Khudawadi,Sind,Lao,Laoo,Latin,Latn,Lepcha,Lepc,Limbu,Limb,Linear_A,Lina,Linear_B,Linb,Lisu,Lycian,Lyci,Lydian,Lydi,Mahajani,Mahj,Makasar,Maka,Malayalam,Mlym,Mandaic,Mand,Manichaean,Mani,Marchen,Marc,Medefaidrin,Medf,Masaram_Gondi,Gonm,Meetei_Mayek,Mtei,Mende_Kikakui,Mend,Meroitic_Cursive,Merc,Meroitic_Hieroglyphs,Mero,Miao,Plrd,Modi,Mongolian,Mong,Mro,Mroo,Multani,Mult,Myanmar,Mymr,Nabataean,Nbat,Nandinagari,Nand,New_Tai_Lue,Talu,Newa,Nko,Nkoo,Nushu,Nshu,Nyiakeng_Puachue_Hmong,Hmnp,Ogham,Ogam,Ol_Chiki,Olck,Old_Hungarian,Hung,Old_Italic,Ital,Old_North_Arabian,Narb,Old_Permic,Perm,Old_Persian,Xpeo,Old_Sogdian,Sogo,Old_South_Arabian,Sarb,Old_Turkic,Orkh,Oriya,Orya,Osage,Osge,Osmanya,Osma,Pahawh_Hmong,Hmng,Palmyrene,Palm,Pau_Cin_Hau,Pauc,Phags_Pa,Phag,Phoenician,Phnx,Psalter_Pahlavi,Phlp,Rejang,Rjng,Runic,Runr,Samaritan,Samr,Saurashtra,Saur,Sharada,Shrd,Shavian,Shaw,Siddham,Sidd,SignWriting,Sgnw,Sinhala,Sinh,Sogdian,Sogd,Sora_Sompeng,Sora,Soyombo,Soyo,Sundanese,Sund,Syloti_Nagri,Sylo,Syriac,Syrc,Tagalog,Tglg,Tagbanwa,Tagb,Tai_Le,Tale,Tai_Tham,Lana,Tai_Viet,Tavt,Takri,Takr,Tamil,Taml,Tangut,Tang,Telugu,Telu,Thaana,Thaa,Thai,Tibetan,Tibt,Tifinagh,Tfng,Tirhuta,Tirh,Ugaritic,Ugar,Unknown,Zzzz,Vai,Vaii,Wancho,Wcho,Warang_Citi,Wara,Yi,Yiii,Zanabazar_Square,Zanb,';
 // Unicode 13.0 additions (ES2021, version 12)
 const TABLE_SCRIPT_VALUES_U13 = 'Chorasmian,Chrs,Dives_Akuru,Diak,Khitan_Small_Script,Kits,Yezidi,Yezi,';
 // Unicode 14.0 additions (ES2022, version 13)
 const TABLE_SCRIPT_VALUES_U14 = 'Cypro_Minoan,Cpmn,Old_Uyghur,Ougr,Tangsa,Tnsa,Toto,Vithkuqi,Vith,';
 // Unicode 15.0 additions (ES2023, version 14)
 const TABLE_SCRIPT_VALUES_U15 = 'Kawi,Nag_Mundari,Nagm,';
+// Unicode 16.0 additions (ES2025, version 16)
+const TABLE_SCRIPT_VALUES_U16 = 'Garay,Gara,Gurung_Khema,Gukh,Kirat_Rai,Krai,Ol_Onal,Onao,Sunuwar,Sunu,Todhri,Todr,Tulu_Tigalari,Tutg,';
+// Unicode 17.0 additions (ES2026, version 17)
+const TABLE_SCRIPT_VALUES_U17 = 'Beria_Erfe,Berf,Sidetic,Sidt,Tai_Yo,Tayo,Tolong_Siki,Tols,';
 // Properties of strings (ES2024, version 15; v-flag only) https://tc39.es/ecma262/#table-binary-unicode-properties-of-strings
 const TABLE_PROPS_OF_STRINGS = ',Basic_Emoji,Emoji_Keycap_Sequence,RGI_Emoji,RGI_Emoji_Flag_Sequence,RGI_Emoji_Modifier_Sequence,RGI_Emoji_Tag_Sequence,RGI_Emoji_ZWJ_Sequence,';
 
@@ -533,6 +538,42 @@ function createUnicodeRegex(pattern) {
   }
 }
 
+// Unicode 17.0 supplementary ID_Start and ID_Continue ranges.
+// Node/V8 may not yet include Unicode 17.0 in \p{ID_Start}/\p{ID_Continue} so we supplement with explicit ranges.
+// These are new codepoints added in Unicode 17.0 that are not present in Unicode 16.0.
+// Ranges are [start, end] inclusive, sorted by start. Single codepoints use start === end.
+// Source: test262 start-unicode-17.0.0 / part-unicode-17.0.0 test files generated by https://github.com/mathiasbynens/caniunicode
+const U17_ID_START = [
+  [0x088F, 0x088F], [0x0C5C, 0x0C5C], [0x0CDC, 0x0CDC], [0xA7CE, 0xA7CF], [0xA7D2, 0xA7D2], [0xA7D4, 0xA7D4], [0xA7F1, 0xA7F1],
+  [0x10940, 0x10959], [0x10EC5, 0x10EC7],
+  [0x11DB0, 0x11DDB],
+  [0x16EA0, 0x16EB8], [0x16EBB, 0x16ED3], [0x16FF2, 0x16FF6],
+  [0x187F8, 0x187FF], [0x18D09, 0x18D1E], [0x18D80, 0x18DF2],
+  [0x1E6C0, 0x1E6DE], [0x1E6E0, 0x1E6E2], [0x1E6E4, 0x1E6E5], [0x1E6E7, 0x1E6ED], [0x1E6F0, 0x1E6F4], [0x1E6FE, 0x1E6FF],
+  [0x2B73A, 0x2B73F], [0x2CEA2, 0x2CEAD],
+  [0x323B0, 0x33479],
+];
+// ID_Continue-only additions (not also ID_Start). These are valid as identifier part but not start.
+const U17_ID_CONTINUE_ONLY = [
+  [0x1ACF, 0x1ADD], [0x1AE0, 0x1AEB],
+  [0x10EFA, 0x10EFB],
+  [0x11B60, 0x11B67],
+  [0x11DE0, 0x11DE9],
+  [0x1E6E3, 0x1E6E3], [0x1E6E6, 0x1E6E6], [0x1E6EE, 0x1E6EF], [0x1E6F5, 0x1E6F5],
+];
+function isInU17Ranges(c, ranges) {
+  // Binary search on sorted range pairs [start, end]
+  let lo = 0, hi = ranges.length - 1;
+  while (lo <= hi) {
+    let mid = (lo + hi) >> 1;
+    let r = ranges[mid];
+    if (c < r[0]) hi = mid - 1;
+    else if (c > r[1]) lo = mid + 1;
+    else return true;
+  }
+  return false;
+}
+
 function Lexer(
   input,
   options
@@ -588,6 +629,8 @@ function Lexer(
       if (targetEsVersion >= 12 || targetEsVersion === Infinity) _tableScriptValues += TABLE_SCRIPT_VALUES_U13;
       if (targetEsVersion >= 13 || targetEsVersion === Infinity) _tableScriptValues += TABLE_SCRIPT_VALUES_U14;
       if (targetEsVersion >= 14 || targetEsVersion === Infinity) _tableScriptValues += TABLE_SCRIPT_VALUES_U15;
+      if (targetEsVersion >= 16 || targetEsVersion === Infinity) _tableScriptValues += TABLE_SCRIPT_VALUES_U16;
+      if (targetEsVersion >= 17 || targetEsVersion === Infinity) _tableScriptValues += TABLE_SCRIPT_VALUES_U17;
     }
     return _tableScriptValues;
   }
@@ -1333,12 +1376,12 @@ function Lexer(
     // There is a nasty edge case regarding nul (zero byte); In sloppy webcompat mode the nul escape may be followed by
     // an 8 or 9 and still be a valid nul. In other modes and templates, `\08` and `\09` are considered syntax errors.
 
-    // Strings: octal escapes are only supported in sloppy mode with web compat enabled
+    // Strings: octal escapes are valid in sloppy mode (part of the main spec, not Annex B)
     // Template literals: explicitly do never support octal escapes so trigger a syntax error in the parser
     // Tagged templates: are allowed to have bad escapes although they will cause `.value` to be `null` in the AST
     // (Note that we do not know here whether the template will be tagged or just a literal, so just return BAD_ESCAPE)
 
-    if (!alwaysAllowOctalEscapes && (webCompat === WEB_COMPAT_OFF || forTemplate || (lexerFlags & LF_STRICT_MODE) === LF_STRICT_MODE)) {
+    if (!alwaysAllowOctalEscapes && (forTemplate || (lexerFlags & LF_STRICT_MODE) === LF_STRICT_MODE)) {
       // If octals are invalid, then the nul escape can not be followed by 8 or 9 either
       // Note: in templates, octals are never valid escapes so `\08` is always a bad escape regardless of mode
       if (a === $$0_30 && (b < $$0_30 || b > $$9_39)) {
@@ -1356,11 +1399,9 @@ function Lexer(
 
       if (forTemplate) {
         if (!lastReportableLexerError) lastReportableLexerError = 'Illegal legacy octal escape in template, where octal escapes are never allowed';
-      } else if ((lexerFlags & LF_STRICT_MODE) === LF_STRICT_MODE) {
-        if (!lastReportableLexerError) lastReportableLexerError = 'Illegal legacy octal escape in strict mode';
       } else {
-        ASSERT(webCompat === WEB_COMPAT_OFF);
-        if (!lastReportableLexerError) lastReportableLexerError = 'Octal escapes are only allowed in sloppy mode with web compat enabled';
+        ASSERT((lexerFlags & LF_STRICT_MODE) === LF_STRICT_MODE);
+        if (!lastReportableLexerError) lastReportableLexerError = 'Illegal legacy octal escape in strict mode';
       }
       return BAD_ESCAPE;
     }
@@ -1419,15 +1460,15 @@ function Lexer(
     if (parsingGoal === GOAL_SCRIPT && webCompat === WEB_COMPAT_ON && !eofd(1) && peeky($$DASH_2D) && peekd(1) === $$GT_3E) {
       // https://tc39.github.io/ecma262/#sec-html-like-comments
       // This extension is not allowed when parsing source code using the goal symbol Module
-      // There are two valid ways of closing html comment;
+      // There are three valid ways of having an html close comment;
       // - <a multi-line comment that contains at least one newline> <space>* <html close>
       // - <newline> <space>* <html close>
-      // TODO: and properly parse this, not like the duplicate hack it is now
-      if (consumedNewlinesBeforeSolid === true) {
+      // - at the start of input (InputElementHashbangOrRegExp allows HTMLCloseComment on the first line)
+      if (consumedNewlinesBeforeSolid === true || solidTokenCount === 0) {
         return parseCommentHtmlClose();
       } else {
-        // Note that the `-->` is not picked up as a comment since that requires a newline to precede it.
-        // TODO: do we report this anywhere? This isn't an error but most likely end up being one
+        // Note that the `-->` is not picked up as a comment since that requires a newline to precede it
+        // (or being at the start of input, which is already handled above).
       }
     }
     return parseSameOrCompound($$DASH_2D); // - -- -=
@@ -2335,6 +2376,13 @@ function Lexer(
     if (regexScanner.test(s)) {
       return s.length === 1 ? VALID_SINGLE_CHAR : VALID_DOUBLE_CHAR;
     }
+    // Supplementary Unicode 17.0 check: Node/V8 may not yet have these in \p{ID_Start}/\p{ID_Continue}
+    // Gated to targetEsVersion >= 17 (ES2026) or Infinity (default), consistent with script table gating.
+    // ID_Start chars are also valid ID_Continue, so check U17_ID_START for both scanners.
+    // U17_ID_CONTINUE_ONLY is only checked for the continue/rest scanner.
+    if ((targetEsVersion >= 17 || targetEsVersion === Infinity) && (isInU17Ranges(c, U17_ID_START) || (regexScanner === getIdRestRegexSuperSlow() && isInU17Ranges(c, U17_ID_CONTINUE_ONLY)))) {
+      return s.length === 1 ? VALID_SINGLE_CHAR : VALID_DOUBLE_CHAR;
+    }
     return INVALID_IDENT_CHAR;
   }
   function isAsciiLetter(c) {
@@ -2629,11 +2677,14 @@ function Lexer(
       if (t === $ERROR) return $ERROR;
       return $ID_PRIVATE_IDENT;
     }
-    if (isIdentStart(c2, pointer) === INVALID_IDENT_CHAR) {
+    let wide = isIdentStart(c2, pointer);
+    if (wide === INVALID_IDENT_CHAR) {
       return THROW('Private identifier must start with a valid IdentifierStart character', pointer, pointer + 1);
     }
     skip();
-    let t = parseIdentifierRest(String.fromCharCode(c2), 1);
+    if (wide === VALID_DOUBLE_CHAR) skip(); // astral codepoint: skip both surrogates
+    let cu2 = wide === VALID_DOUBLE_CHAR ? input.codePointAt(pointer - 2) : c2;
+    let t = parseIdentifierRest(String.fromCodePoint(cu2), wide === VALID_DOUBLE_CHAR ? 2 : 1);
     if (t === $ERROR) return $ERROR;
     return $ID_PRIVATE_IDENT;
   }
@@ -2812,20 +2863,29 @@ function Lexer(
       }
     }
 
-    if (reffedGroupNames !== ',' && (webCompat === WEB_COMPAT_OFF || declaredGroupNames !== ',')) {
-      // We need to validate the referenced group names with `\k` atom escapes.
-      // In web compat mode, we can ignore that if no names were declared at all
-      // This is a fairly unused functionality so I'm going to do this in a slow path for now.
-      let bad = false;
-      reffedGroupNames.split(',').filter(Boolean).forEach(name => {
-        if (!declaredGroupNames.includes(',' + name + ',')) {
-          // This would only be valid if there were no names but by definition this is a name.
-          regexSyntaxError('Found a `\\k` that referenced `' + name + '` but no capturing group had this name');
-          bad = true;
+    if (reffedGroupNames !== ',') {
+      if (declaredGroupNames === ',') {
+        // No named groups exist. `\k<x>` is only valid without u-flag or v-flag (it matches literal chars).
+        // With u-flag or v-flag, `\k` requires NamedCaptureGroups to be true, which requires a named group.
+        if (ustatusFlags === REGEX_GOOD_WITH_U_FLAG || ustatusFlags === REGEX_GOOD_WITH_V_FLAG) {
+          regexSyntaxError('Found a `\\k` escape but the regex has no named groups and the u-flag or v-flag is set');
+          return $ERROR;
         }
-      });
-      if (bad) {
-        return $ERROR;
+        // Without u/v flag, `\k<x>` is treated as literal chars (valid)
+        ustatusBody = updateRegexUflagIsIllegal(ustatusBody, 'A `\\k` escape without named groups is only valid without u-flag or v-flag');
+      } else {
+        // Named groups exist. Validate that all referenced names exist.
+        // This is a fairly unused functionality so I'm going to do this in a slow path for now.
+        let bad = false;
+        reffedGroupNames.split(',').filter(Boolean).forEach(name => {
+          if (!declaredGroupNames.includes(',' + name + ',')) {
+            regexSyntaxError('Found a `\\k` that referenced `' + name + '` but no capturing group had this name');
+            bad = true;
+          }
+        });
+        if (bad) {
+          return $ERROR;
+        }
       }
     }
 
@@ -3719,10 +3779,7 @@ function Lexer(
         let va = getHexValue(a);
         if (va === HEX_OOB) {
           let reason = 'First char of hex escape not a valid digit';
-          if (webCompat === WEB_COMPAT_ON) {
-            return updateRegexUflagIsIllegal(REGEX_ALWAYS_GOOD, reason);
-          }
-          return regexSyntaxError(reason);
+          return updateRegexUflagIsIllegal(REGEX_ALWAYS_GOOD, reason);
         }
         ASSERT_skip(a);
         if (eof()) {
@@ -3733,10 +3790,7 @@ function Lexer(
         let vb = getHexValue(b);
         if (vb === HEX_OOB) {
           let reason = 'Second char of hex escape not a valid digit';
-          if (webCompat === WEB_COMPAT_ON) {
-            return updateRegexUflagIsIllegal(REGEX_ALWAYS_GOOD, reason);
-          }
-          return regexSyntaxError(reason);
+          return updateRegexUflagIsIllegal(REGEX_ALWAYS_GOOD, reason);
         }
         ASSERT_skip(b);
         return REGEX_ALWAYS_GOOD;
@@ -3901,13 +3955,9 @@ function Lexer(
         return regexSyntaxError('Regular expressions do not support line continuations (escaped newline)');
 
       case REGATOM_ESC_WC:
-        // Non-special letters can only be escaped in webcompat mode and without u-flag
+        // Non-special letters can only be escaped without u-flag or v-flag (identity escape)
         ASSERT_skip(c);
-        if (webCompat === WEB_COMPAT_ON) {
-          // Atom escape was acceptable but only without u-flag
-          return updateRegexUflagIsIllegal(REGEX_ALWAYS_GOOD, 'Atom escape can only escape certain letters without u-flag or v-flag');
-        }
-        return regexSyntaxError('Cannot escape this letter [' + String.fromCharCode(c) + ']');
+        return updateRegexUflagIsIllegal(REGEX_ALWAYS_GOOD, 'Atom escape can only escape certain letters without u-flag or v-flag');
 
       // <SCRUB ASSERTS>
       default:
@@ -4038,6 +4088,13 @@ function Lexer(
         // bracketDepth >= 2: ] closes innermost. If next char is not ] or [, and no content at this depth, one ] closes all (e.g. /[[[]]/v). With content (e.g. [a]) we only close one level.
         const next = peekd(1);
         if (bracketDepth >= 2 && next !== $$SQUARE_R_5D && next !== $$SQUARE_L_5B && !seenContentAtCurrentDepth) {
+          // In v mode, `[` starts a nested class and `]` only closes one level, so the outer class would be
+          // unterminated here (e.g. /[[]/v). But in non-v mode, `[` is a literal and this `]` closes the class.
+          // Only flag when `[` was a genuine nested class opener (not from the literal-] + [ combo like /[][]/v).
+          if (!closeBothOnNextRbracket) {
+            regexBodyHasSyntaxInvalidWithVFlag = true;
+            lastPotentialRegexErrorForVFlag = 'In v-mode `[` inside a character class starts a nested class; not enough `]` to close all levels';
+          }
           break; // leave ] for the post-loop ASSERT_skip to consume; closes entire class
         }
         if (bracketDepth === 2 && closeBothOnNextRbracket) {
@@ -4061,7 +4118,6 @@ function Lexer(
           literalRbracketJustAdded = false;
           hasNestedBracket = true;
           hasSeenVModeSyntax = true;
-          regexBodyUsedVOnlySyntax = true;
           hasClassContent = true;
           ASSERT_skip($$SQUARE_L_5B);
           if (eof()) return regexSyntaxError('Unexpected early EOF while parsing character class');
@@ -4094,7 +4150,7 @@ function Lexer(
           continue;
         }
         // && in a char class is v-only syntax (e.g. [a&&b]). Reject when missing left ([&&a]) or right ([a&&]) operand.
-        if (supportRegexVFlag && c === $$AND_26 && !eof() && peekd(1) === $$AND_26) {
+        if (c === $$AND_26 && !eof() && peekd(1) === $$AND_26) {
           if (!hasClassContent) {
             regexBodyHasSyntaxInvalidWithVFlag = true;
             lastPotentialRegexErrorForVFlag = 'Set intersection `&&` requires a left operand in character class with the v flag';
@@ -4114,17 +4170,38 @@ function Lexer(
           continue;
         }
         // Single & in v mode is invalid (only && is set intersection).
-        if (supportRegexVFlag && c === $$AND_26) {
+        if (c === $$AND_26) {
           regexBodyHasSyntaxInvalidWithVFlag = true;
           lastPotentialRegexErrorForVFlag = 'Single `&` in character class is not allowed with the v flag (use `&&` for set intersection)';
         }
         // In v mode, unescaped } outside \q{...} is invalid (stray brace).
-        if (supportRegexVFlag && c === $$CURLY_R_7D) {
+        else if (c === $$CURLY_R_7D) {
           regexBodyHasSyntaxInvalidWithVFlag = true;
           lastPotentialRegexErrorForVFlag = 'Stray `}` in character class is not allowed with the v flag';
         }
+        // In v mode, ClassSetSyntaxCharacter ( ) { / | must be escaped inside character classes.
+        // https://tc39.es/ecma262/#prod-ClassSetSyntaxCharacter
+        // Note: [ ] } \ - are handled elsewhere; ( ) { / | are handled here.
+        else if (c === $$PAREN_L_28 || c === $$PAREN_R_29 || c === $$CURLY_L_7B || c === $$FWDSLASH_2F || c === $$OR_7C) {
+          regexBodyHasSyntaxInvalidWithVFlag = true;
+          lastPotentialRegexErrorForVFlag = 'Unescaped `' + String.fromCharCode(c) + '` in character class is not allowed with the v flag (ClassSetSyntaxCharacter must be escaped)';
+        }
+        // In v mode, ClassSetReservedDoublePunctuator: two consecutive identical punctuators from the set
+        // ! # $ % * + , . : ; < = > ? @ ^ ` ~ are reserved and invalid.
+        // https://tc39.es/ecma262/#prod-ClassSetReservedDoublePunctuator
+        // Note: && and -- are handled above as set operators.
+        else if (!eof() && peekd(1) === c && (
+          c === $$EXCL_21 || c === $$HASH_23 || c === $$$_24 || c === $$PERCENT_25 ||
+          c === $$STAR_2A || c === $$PLUS_2B || c === $$COMMA_2C || c === $$DOT_2E ||
+          c === $$COLON_3A || c === $$SEMI_3B || c === $$LT_3C || c === $$IS_3D ||
+          c === $$GT_3E || c === $$QMARK_3F || c === $$AT_40 || c === $$XOR_5E ||
+          c === $$TICK_60 || c === $$TILDE_7E
+        )) {
+          regexBodyHasSyntaxInvalidWithVFlag = true;
+          lastPotentialRegexErrorForVFlag = 'Double `' + String.fromCharCode(c) + String.fromCharCode(c) + '` in character class is a reserved double punctuator with the v flag (ClassSetReservedDoublePunctuator)';
+        }
         // In v mode (unicodeSets), \q{...} is a ClassString (multi-code-point string); has its own delimiter/escape rules.
-        if (supportRegexVFlag && c === $$BACKSLASH_5C && neofd(3) && peekd(1) === $$Q_71 && peekd(2) === $$CURLY_L_7B) {
+        else if (c === $$BACKSLASH_5C && neofd(3) && peekd(1) === $$Q_71 && peekd(2) === $$CURLY_L_7B) {
           hasSeenVModeSyntax = true;
           regexBodyUsedVOnlySyntax = true;
           ASSERT_skip($$BACKSLASH_5C);
@@ -4537,6 +4614,7 @@ function Lexer(
       }
       seenContentAtCurrentDepth = true;
       hasClassContent = true;
+      if (bracketDepth >= 2) regexBodyUsedVOnlySyntax = true; // content inside nested class confirms v-mode syntax
       c = peek();
     }
 
@@ -5343,7 +5421,7 @@ function Lexer(
           return regexSyntaxError('Invalid modifier flag in remove set (only i, m, s allowed) [ord=' + c + ']');
         }
       }
-      if (removeMask === 0) return regexSyntaxError('Modifier group: second flag set cannot be empty after `-`');
+      if (addMask === 0 && removeMask === 0) return regexSyntaxError('Modifier group: both flag sets cannot be empty around `-`');
     }
     if (eof() || peek() !== $$COLON_3A) return regexSyntaxError('Modifier group: expected `:` after modifier flags');
     ASSERT_skip($$COLON_3A);
