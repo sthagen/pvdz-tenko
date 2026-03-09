@@ -368,7 +368,7 @@ function ASSERT_ASSIGN_EXPR(allowAssignment) {
   ASSERT(allowAssignment === ASSIGN_EXPR_IS_OK || allowAssignment === ASSIGN_EXPR_IS_ERROR, 'allowAssignment is enum', allowAssignment);
 }
 function ASSERT_FDS(fdState) {
-  ASSERT([FDS_ILLEGAL, FDS_IFELSE, FDS_LEX, FDS_VAR].includes(fdState), 'FDS enum', fdState);
+  ASSERT([FDS_ILLEGAL, FDS_IFELSE, FDS_LEX, FDS_VAR, FDS_SWITCH_CASE].includes(fdState), 'FDS enum', fdState);
 }
 function ASSERT_BINDING_TYPE(bindingType) {
   ASSERT([BINDING_TYPE_NONE,BINDING_TYPE_ARG,BINDING_TYPE_VAR,BINDING_TYPE_LET,BINDING_TYPE_CONST,BINDING_TYPE_CLASS,BINDING_TYPE_FUNC_VAR,BINDING_TYPE_FUNC_LEX,BINDING_TYPE_FUNC_STMT,BINDING_TYPE_CATCH_IDENT,BINDING_TYPE_CATCH_OTHER,BINDING_TYPE_USING,BINDING_TYPE_AWAIT_USING].includes(bindingType), 'bindingType is an enum', bindingType);
@@ -389,6 +389,7 @@ import {
   VERSION_EXPORT_STAR_AS,
   VERSION_IMPORT_META,
   VERSION_TOPLEVEL_AWAIT,
+  VERSION_ARBITRARY_MODULE_NS_NAMES,
   VERSION_IMPORT_ATTRIBUTES,
   VERSION_WHATEVER,
   IS_ASYNC,
@@ -457,6 +458,8 @@ import {
   PIGGY_BACK_WAS_PROTO,
   PIGGY_BACK_WAS_ARROW,
   PIGGY_BACK_WAS_PRIVATE_IDENT,
+  PIGGY_BACK_WAS_ASYNC_OF,
+  PIGGY_BACK_FOR_USING_OF_INLINE,
   NO_SPREAD,
   LAST_SPREAD,
   MID_SPREAD,
@@ -500,6 +503,7 @@ import {
   FDS_IFELSE,
   FDS_LEX,
   FDS_VAR,
+  FDS_SWITCH_CASE,
   IS_GLOBAL_TOPLEVEL,
   NOT_GLOBAL_TOPLEVEL,
   IS_LABELLED,
@@ -699,6 +703,7 @@ function Parser(code, options = {}) {
   let allowClassStaticBlock = (targetEsVersion >= VERSION_TOPLEVEL_AWAIT || targetEsVersion === VERSION_WHATEVER); // ES2022
   let allowPublicClassFields = (targetEsVersion >= VERSION_TOPLEVEL_AWAIT || targetEsVersion === VERSION_WHATEVER); // ES2022 public class field initializers (a = b; a;)
   let allowPrivateClassFields = (targetEsVersion >= VERSION_TOPLEVEL_AWAIT || targetEsVersion === VERSION_WHATEVER); // ES2022 private fields/methods (#x, this.#x, #x in obj)
+  let allowArbitraryModuleNsNames = (targetEsVersion >= VERSION_ARBITRARY_MODULE_NS_NAMES || targetEsVersion === VERSION_WHATEVER); // ES2022 string literals as import/export names
   let allowUsingDeclaration = !!options_allowUsingDeclaration; // Explicit opt-in flag (not tied to ES version)
   let allowImportAttributes = (targetEsVersion >= VERSION_IMPORT_ATTRIBUTES || targetEsVersion === VERSION_WHATEVER); // ES2025
 
@@ -731,20 +736,21 @@ function Parser(code, options = {}) {
   function pushPrivateNameScope() {
     privateNameScopeStack.push({declared: new Map(), uses: []});
   }
-  function declarePrivateName(name, kind, start, stop) {
+  function declarePrivateName(name, kind, isStatic, start, stop) {
     // - `class C { #x; #x; }`                  -- error: duplicate
-    // - `class C { get #x(){} set #x(v){} }`   -- ok: getter+setter pair
+    // - `class C { get #x(){} set #x(v){} }`   -- ok: getter+setter pair (same static-ness)
+    // - `class C { get #x(){} static set #x(v){} }`  -- error: static mismatch
     ASSERT(privateNameScopeStack.length > 0, 'must be inside a class body');
     let scope = privateNameScopeStack[privateNameScopeStack.length - 1];
     let existing = scope.declared.get(name);
     if (existing !== undefined) {
-      let combined = existing | kind;
-      if (combined !== (PRIVATE_KIND_GETTER | PRIVATE_KIND_SETTER)) {
+      let combined = existing.kind | kind;
+      if (combined !== (PRIVATE_KIND_GETTER | PRIVATE_KIND_SETTER) || existing.isStatic !== isStatic) {
         return THROW_RANGE('Duplicate private name `#' + name + '`', start, stop);
       }
-      scope.declared.set(name, combined);
+      scope.declared.set(name, {kind: combined, isStatic});
     } else {
-      scope.declared.set(name, kind);
+      scope.declared.set(name, {kind, isStatic});
     }
   }
   function usePrivateName(name, start, stop) {
@@ -783,7 +789,10 @@ function Parser(code, options = {}) {
     // - `class C { 'key' = 1; }`                      literal field init
     // - `class C { [expr] = 1; }`                     computed field init
     ASSERT_skipAny($PUNC_EQ, lexerFlags);
-    let fieldFlags = lexerFlags | LF_IN_CLASS_FIELD_INIT;
+    // Field initializers create a new function boundary that is neither async nor a generator.
+    // `async function f() { class C { x = await; } }` — await is an identifier, not AwaitExpression
+    // `function* g() { class C { x = yield; } }` — yield is an identifier, not YieldExpression
+    let fieldFlags = sansFlag(lexerFlags, LF_IN_ASYNC | LF_IN_GENERATOR) | LF_IN_CLASS_FIELD_INIT;
     let $tp_value_start = tok_getStart();
     let $tp_value_line = tok_getLine();
     let $tp_value_column = tok_getColumn();
@@ -1845,6 +1854,19 @@ function Parser(code, options = {}) {
       return THROW_RANGE('Next token should be an ident but was `' + tok_sliceInput(tok_getStart(), tok_getStop()) + '`', tok_getStart(), tok_getStop());
     }
   }
+  function verifyModuleExportNameStringWellFormed($tp_start, $tp_stop, $tp_canon) {
+    // ModuleExportName : StringLiteral — It is a Syntax Error if IsStringWellFormedUnicode of the StringValue is false.
+    for (let i = 0; i < $tp_canon.length; ++i) {
+      let code = $tp_canon.charCodeAt(i);
+      if (code >= 0xD800 && code <= 0xDBFF) {
+        let next = $tp_canon.charCodeAt(i + 1);
+        if (!(next >= 0xDC00 && next <= 0xDFFF)) return THROW_RANGE('Module export name string must be well-formed unicode; found a lone high surrogate', $tp_start, $tp_stop);
+        ++i;
+      } else if (code >= 0xDC00 && code <= 0xDFFF) {
+        return THROW_RANGE('Module export name string must be well-formed unicode; found a lone low surrogate', $tp_start, $tp_stop);
+      }
+    }
+  }
   function ASSERT_skipToArrowOrDie(what, lexerFlags) {
     skipToArrowOrDie(lexerFlags);
   }
@@ -2134,10 +2156,10 @@ function Parser(code, options = {}) {
     skipToIdentCurlyClose(lexerFlags);
   }
   function skipToIdentCurlyClose(lexerFlags) {
-    // Next token must be ident, or `}`, with maybe some whitespace
+    // Next token must be ident, string (arbitrary module namespace names), or `}`, with maybe some whitespace
     skipAny(lexerFlags);
     // Since the rest has to check it anyways we don't need to validate it here
-    ASSERT_VALID( isIdentToken(tok_getType()) || tok_getType() === $PUNC_CURLY_CLOSE, 'not many options, wanted ident }');
+    ASSERT_VALID( isIdentToken(tok_getType()) || isStringToken(tok_getType()) || tok_getType() === $PUNC_CURLY_CLOSE, 'not many options, wanted ident string }');
   }
   function ASSERT_skipToIdentStarCurlyOpenParenOpenString(what, lexerFlags) {
     skipToIdentStarCurlyOpenParenOpenString(lexerFlags);
@@ -2347,8 +2369,8 @@ function Parser(code, options = {}) {
     // does not propagate up in any context where it is allowed and when nested in `if` or `else` it's considered to
     // be wrapped in a block. So neither legit function propagates to the parent of the statement that encloses it.
 
-    ASSERT(bindingType !== BINDING_TYPE_FUNC_VAR || ( (fdState === FDS_VAR && (hasNoFlag(lexerFlags, LF_IN_GLOBAL) || goalMode === GOAL_SCRIPT)) || (fdState === FDS_LEX && hasNoFlag(lexerFlags, LF_STRICT_MODE) && isLabelled !== IS_LABELLED && options_webCompat === WEB_COMPAT_ON) ), 'FUNC_VAR implies valid var-hoisting context (top-level or sloppy+webcompat block, not async/gen per B.3.2)');
-    ASSERT(bindingType !== BINDING_TYPE_FUNC_STMT || (fdState === FDS_LEX && hasNoFlag(lexerFlags, LF_STRICT_MODE) && isLabelled === IS_LABELLED && options_webCompat === WEB_COMPAT_ON), 'FUNC_STMT is only for sloppy+webcompat labelled plain function decls in blocks (allows duplicate exception)');
+    ASSERT(bindingType !== BINDING_TYPE_FUNC_VAR || ( (fdState === FDS_VAR && (hasNoFlag(lexerFlags, LF_IN_GLOBAL) || goalMode === GOAL_SCRIPT)) || ((fdState === FDS_LEX || fdState === FDS_SWITCH_CASE) && hasNoFlag(lexerFlags, LF_STRICT_MODE) && isLabelled !== IS_LABELLED && options_webCompat === WEB_COMPAT_ON) ), 'FUNC_VAR implies valid var-hoisting context (top-level or sloppy+webcompat block, not async/gen per B.3.2)');
+    ASSERT(bindingType !== BINDING_TYPE_FUNC_STMT || ((fdState === FDS_LEX || fdState === FDS_SWITCH_CASE) && hasNoFlag(lexerFlags, LF_STRICT_MODE) && isLabelled === IS_LABELLED && options_webCompat === WEB_COMPAT_ON), 'FUNC_STMT is only for sloppy+webcompat labelled plain function decls in blocks (allows duplicate exception)');
 
     if (bindingType === BINDING_TYPE_FUNC_VAR) {
       // B.3.3.1: In webcompat mode, if the block function's implicit var would conflict with a lexical/catch binding
@@ -2365,8 +2387,8 @@ function Parser(code, options = {}) {
       // [v]: `(function(){ try {} catch({f}) { { function f(){} } } }())` (same for catch pattern bindings)
       // [v]: `(function(){ try {} catch(f) { { function f(){} } } }())` (CATCH_IDENT: var IS created per B.3.5)
       // [v]: `(function(f){ { function f(){} } }())` (param: var IS created, param conflicts handled elsewhere)
-      if (fdState === FDS_LEX && options_webCompat === WEB_COMPAT_ON) {
-        ASSERT(hasNoFlag(lexerFlags, LF_STRICT_MODE), 'FUNC_VAR+FDS_LEX is only for sloppy mode plain block functions');
+      if ((fdState === FDS_LEX || fdState === FDS_SWITCH_CASE) && options_webCompat === WEB_COMPAT_ON) {
+        ASSERT(hasNoFlag(lexerFlags, LF_STRICT_MODE), 'FUNC_VAR+FDS_LEX/FDS_SWITCH_CASE is only for sloppy mode plain block functions');
         ASSERT(isLabelled !== IS_LABELLED, 'labelled block functions use FUNC_STMT, not FUNC_VAR');
         let scanScoop = scoop;
         let hasConflict = false;
@@ -2413,7 +2435,7 @@ function Parser(code, options = {}) {
       // [x]: `{ function f(){} { var f } }` — var in nested block conflicts with lex in parent block
       // [v]: `{ function f(){} } var f;` — different scope levels, no conflict
       // [v]: `{ function f(){} function f(){} }` — duplicate block functions allowed (sloppy+webcompat)
-      if (fdState === FDS_LEX && options_webCompat === WEB_COMPAT_ON) {
+      if ((fdState === FDS_LEX || fdState === FDS_SWITCH_CASE) && options_webCompat === WEB_COMPAT_ON) {
         SCOPE_addLexBinding(scoop, $tp_bindingIdent_start, $tp_bindingIdent_stop, $tp_bindingIdent_canon, BINDING_TYPE_FUNC_STMT, fdState);
         // Hoist var to parent scopes (up to but not including func root)
         if (scoop.parent && scoop.parent.type !== SCOPE_LAYER_FUNC_ROOT) {
@@ -2709,7 +2731,7 @@ function Parser(code, options = {}) {
         // [v]: `((x,x))`
         scoop.dupeParamErrorStart = $tp_bindingIdent_start + 1; // offset 1
         scoop.dupeParamErrorStop = $tp_bindingIdent_stop;
-      } else if (options_webCompat !== WEB_COMPAT_ON || value !== BINDING_TYPE_FUNC_STMT || bindingType !== BINDING_TYPE_FUNC_STMT || fdState !== FDS_LEX) {
+      } else if (options_webCompat !== WEB_COMPAT_ON || value !== BINDING_TYPE_FUNC_STMT || bindingType !== BINDING_TYPE_FUNC_STMT || (fdState !== FDS_LEX && fdState !== FDS_SWITCH_CASE)) {
         return THROW_RANGE('Attempted to create a lexical binding for `' + $tp_bindingIdent_canon + '` but another binding already existed on the same level', $tp_bindingIdent_start, $tp_bindingIdent_stop);
       } else {
         // https://tc39.es/ecma262/#sec-block-duplicates-allowed-static-semantics
@@ -3438,18 +3460,19 @@ function Parser(code, options = {}) {
         // [v]: `function f(){}` (top-level script)
         // [v]: `function g(){ function f(){} }` (function body root)
         nameBindingType = BINDING_TYPE_FUNC_VAR;
-      } else if (fdState === FDS_LEX && hasNoFlag(lexerFlags, LF_STRICT_MODE) && isLabelled !== IS_LABELLED && $tp_async_type === $UNTYPED && $tp_star_type === $UNTYPED && options_webCompat === WEB_COMPAT_ON) {
+      } else if ((fdState === FDS_LEX || fdState === FDS_SWITCH_CASE) && hasNoFlag(lexerFlags, LF_STRICT_MODE) && isLabelled !== IS_LABELLED && $tp_async_type === $UNTYPED && $tp_star_type === $UNTYPED && options_webCompat === WEB_COMPAT_ON) {
         // Sloppy plain non-labelled block function + webcompat → var-like hoisting per Annex B B.3.2/B.3.3.
         // Only applies to plain FunctionDeclaration (not async/generator — those are always FUNC_LEX in blocks).
         // Without webcompat, block functions are block-scoped (FUNC_LEX) even in sloppy mode.
         // Note: B.3.3.1 (conflict skip) is handled in SCOPE_addFuncDeclName, not here.
         // [v]: `{ function f(){} }` (sloppy+webcompat)
+        // [v]: `switch(0) { case 0: function f(){} }` (sloppy+webcompat, switch case)
         // [x]: `{ async function f(){} }` → falls to FUNC_LEX below ($tp_async_type !== $UNTYPED)
         // [x]: `{ function *f(){} }` → falls to FUNC_LEX below ($tp_star_type !== $UNTYPED)
         ASSERT($tp_async_type === $UNTYPED, 'async functions in blocks never get FUNC_VAR');
         ASSERT($tp_star_type === $UNTYPED, 'generator functions in blocks never get FUNC_VAR');
         nameBindingType = BINDING_TYPE_FUNC_VAR;
-      } else if (fdState === FDS_LEX && hasNoFlag(lexerFlags, LF_STRICT_MODE) && $tp_async_type === $UNTYPED && $tp_star_type === $UNTYPED && options_webCompat === WEB_COMPAT_ON) {
+      } else if ((fdState === FDS_LEX || fdState === FDS_SWITCH_CASE) && hasNoFlag(lexerFlags, LF_STRICT_MODE) && $tp_async_type === $UNTYPED && $tp_star_type === $UNTYPED && options_webCompat === WEB_COMPAT_ON) {
         // Sloppy labelled plain function in block + webcompat → lexical, but uses FUNC_STMT to allow the
         // duplicate exception per sec-block-duplicates-allowed-static-semantics (part of Annex B):
         // > It is a Syntax Error if the LexicallyDeclaredNames of StatementList contains any duplicate
@@ -3874,7 +3897,14 @@ function Parser(code, options = {}) {
         return;
 
       case $ID_using:
-        if (allowUsingDeclaration && isLabelled !== IS_LABELLED && fdState !== FDS_ILLEGAL && fdState !== FDS_IFELSE) {
+        // [v]: `{ using x = foo(); }` — using in block
+        // [v]: `using x = foo();` — using at module top level (module goal)
+        // [x]: `using x = foo();` — using at script top level (script goal)
+        // [x]: `if (y) using x = foo();` — using in single-statement position
+        // [x]: `switch (y) { case 0: using x = foo(); }` — using directly in switch case
+        if (allowUsingDeclaration && isLabelled !== IS_LABELLED && fdState !== FDS_ILLEGAL && fdState !== FDS_IFELSE && fdState !== FDS_SWITCH_CASE) {
+          // `using` not allowed at script top-level (only inside blocks, for-headers, function bodies, or module top-level)
+          if (isGlobalToplevel === IS_GLOBAL_TOPLEVEL && goalMode === GOAL_SCRIPT) break;
           parseUsingDeclaration(lexerFlags, $tp_ident_start, $tp_ident_line, $tp_ident_column, scoop, labelSet, fdState, nestedLabels, astProp);
           return;
         }
@@ -3885,7 +3915,7 @@ function Parser(code, options = {}) {
         return;
     }
 
-    parseIdentLabelOrExpressionStatement(lexerFlags, scoop, labelSet, fdState, nestedLabels, astProp);
+    parseIdentLabelOrExpressionStatement(lexerFlags, scoop, labelSet, isLabelled, fdState, nestedLabels, astProp);
   }
 
   function parseFromNumberStatement(lexerFlags, astProp) {
@@ -4128,13 +4158,20 @@ function Parser(code, options = {}) {
         return parseAsyncFunctionDecl(lexerFlags, $tp_async_start, $tp_async_line, $tp_async_column, fromStmtOrExpr, scoop, isExport, exportedBindings, isLabelled, fdState, astProp);
       }
 
-      if ($tp_afterAsync_type === $ID_in || $tp_afterAsync_type === $ID_instanceof || $tp_afterAsync_type === $ID_of) {
+      if ($tp_afterAsync_type === $ID_in || $tp_afterAsync_type === $ID_instanceof) {
         // - `async in x`
         // - `async instanceof x`
-        // - `for (async of x);` / `for await (async of x);` — async is contextual keyword, fine as binding ident
-
         return parseExpressionAfterAsyncAsVarName(lexerFlags, fromStmtOrExpr, $tp_async_start, $tp_async_stop, $tp_async_line, $tp_async_column, $tp_async_canon, isNewArg, allowAssignment, astProp);
       }
+
+      if ($tp_afterAsync_type === $ID_of && hasAllFlags(lexerFlags, LF_IN_FOR_LHS)) {
+        // - `for (async of x);` / `for await (async of x);` — async as var name, `of` is for-of keyword
+        // Note: `for (async of => {}; ...)` is handled in parseForHeaderRest after `of` is seen
+        // Piggyback PIGGY_BACK_WAS_ASYNC_OF to signal parseForHeaderRest that the LHS was bare `async`
+        return parseExpressionAfterAsyncAsVarName(lexerFlags, fromStmtOrExpr, $tp_async_start, $tp_async_stop, $tp_async_line, $tp_async_column, $tp_async_canon, isNewArg, allowAssignment, astProp) | PIGGY_BACK_WAS_ASYNC_OF;
+      }
+      // Outside for-headers, `async of => {}` falls through to parseParenlessArrowAfterAsync below
+      // - `async of => of`        — async arrow with `of` as param name
 
       // - `async foo => ..`                        ok
       //          ^
@@ -4390,7 +4427,14 @@ function Parser(code, options = {}) {
     // The +Await means `await` is a keyword (cannot be used as identifier/binding/label).
     // Additionally: "It is a Syntax Error if ContainsAwait of ClassStaticBlockStatementList is true."
     // So `await expr` is also disallowed. LF_IN_ASYNC makes `await` a keyword, LF_IN_STATIC_BLOCK rejects await expressions.
-    let lexerFlagsNoTemplate = sansFlag(lexerFlags, LF_IN_TEMPLATE | LF_NO_ASI) | LF_IN_ASYNC | LF_IN_STATIC_BLOCK;
+    // ~Yield: strip LF_IN_GENERATOR so `yield` is not a keyword/expression here
+    // - `function *g() { class C { static { yield; } } }`   error, yield is not allowed
+    // - `function *g() { class C { static { yield 1; } } }` error, yield expression not allowed
+    // ~Return: handled by checking LF_IN_STATIC_BLOCK in parseReturnStatement
+    // - `function f() { class C { static { return; } } }`   error, return is not allowed
+    // new.target is allowed in static blocks (evaluates to undefined at runtime)
+    // - `class C { static { new.target; } }`                 ok, new.target is allowed
+    let lexerFlagsNoTemplate = sansFlag(lexerFlags, LF_IN_TEMPLATE | LF_NO_ASI | LF_IN_SWITCH | LF_IN_ITERATION | LF_IN_GENERATOR) | LF_IN_ASYNC | LF_IN_STATIC_BLOCK | LF_CAN_NEW_DOT_TARGET;
     let $tp_curly_start = tok_getStart();
     let $tp_curly_line = tok_getLine();
     let $tp_curly_column = tok_getColumn();
@@ -4843,25 +4887,37 @@ function Parser(code, options = {}) {
         return THROW_RANGE('The `export * as x from src`, syntax was introduced in ES2020 but currently targeted version is lower', $tp_export_start, tok_getStop());
       }
 
-      ASSERT_skipToIdentOrDie($ID_as, lexerFlags);
-      // note: the exported _name_ can be any identifier, keywords included
+      // note: the exported _name_ can be any identifier or string, keywords included
+      skipAny(lexerFlags);
+      if (!isIdentToken(tok_getType()) && !isStringToken(tok_getType())) {
+        return THROW_RANGE('Next token should be an ident or string but was `' + tok_sliceInput(tok_getStart(), tok_getStop()) + '`', tok_getStart(), tok_getStop());
+      }
 
+      let exportedNameIsString = isStringToken(tok_getType());
+      if (exportedNameIsString && !allowArbitraryModuleNsNames) {
+        return THROW_RANGE('String literal export names (arbitrary module namespace names) were introduced in ES2022 but currently targeted version is lower', tok_getStart(), tok_getStop());
+      }
       let $tp_exportedName_line = tok_getLine();
       let $tp_exportedName_column = tok_getColumn();
       let $tp_exportedName_start = tok_getStart();
       let $tp_exportedName_stop = tok_getStop();
       let $tp_exportedName_canon = tok_getCanoN();
 
+      if (exportedNameIsString) verifyModuleExportNameStringWellFormed($tp_exportedName_start, $tp_exportedName_stop, $tp_exportedName_canon);
       addNameToExports(exportedNames, $tp_exportedName_start, $tp_exportedName_stop, $tp_exportedName_canon);
 
       // Must skip to `from` but we'll check for that explicitly next, so just skipAny
-      ASSERT_skipAny($G_IDENT, lexerFlags);
+      ASSERT_skipAny(exportedNameIsString ? $G_STRING : $G_IDENT, lexerFlags);
+
+      let exportedNode = exportedNameIsString
+        ? AST_getStringNode($tp_exportedName_start, $tp_exportedName_stop, $tp_exportedName_line, $tp_exportedName_column, $tp_exportedName_canon, false)
+        : AST_getIdentNode($tp_exportedName_start, $tp_exportedName_stop, $tp_exportedName_line, $tp_exportedName_column, $tp_exportedName_canon);
 
       // Create specifiers here because location of the specifier is the `* as x` part only (same for estree and babel)
       let specifiers = [{
         type: 'ExportNamespaceSpecifier',
         loc: AST_getClosedLoc($tp_star_start, $tp_star_line, $tp_star_column),
-        exported: AST_getIdentNode($tp_exportedName_start, $tp_exportedName_stop, $tp_exportedName_line, $tp_exportedName_column, $tp_exportedName_canon),
+        exported: exportedNode,
       }];
       if (options_nodeRange) specifiers[0].range = [$tp_star_start, $tp_exportedName_stop];
 
@@ -4976,7 +5032,7 @@ function Parser(code, options = {}) {
       let tmpExportedBindings = new Set;
       ASSERT(tmpExportedBindings._ = 'exported bindings');
       ASSERT(tmpExportedBindings._i = ++uid_counter);
-      parseExportObject(lexerFlags, tmpExportedNames, tmpExportedBindings);
+      let hasStringLocal = parseExportObject(lexerFlags, tmpExportedNames, tmpExportedBindings);
 
       if (tok_getType() === $ID_from) {
         // drop the tmp lists
@@ -4997,6 +5053,11 @@ function Parser(code, options = {}) {
           AST_set('attributes', []);
         }
       } else {
+        // `export { "foo" }` or `export { "foo" as bar }` without `from` is a syntax error
+        // (string as local name requires a `from` clause, per spec ReferencedBindings early error)
+        if (hasStringLocal) {
+          return THROW_RANGE('Export specifiers with a string as the local name require a `from` clause', $tp_export_start, $tp_export_stop);
+        }
         AST_set('source', null);
         AST_set('attributes', []);
         // pump the names into the real sets now
@@ -5209,9 +5270,12 @@ function Parser(code, options = {}) {
     // - `export {...} from 'x'`
     ASSERT_skipToIdentCurlyClose($PUNC_CURLY_OPEN, lexerFlags);
 
-    // A specifier must start with an ident and may have a trailing comma
-    while (isIdentToken(tok_getType())) {
-      parseExportSpecifier(lexerFlags, tmpExportedNames, tmpExportedBindings);
+    // Track whether any specifier used a string as the local name (needs `from` clause)
+    let hasStringLocal = false;
+
+    // A specifier must start with an ident or string (arbitrary module namespace names) and may have a trailing comma
+    while (isIdentToken(tok_getType()) || isStringToken(tok_getType())) {
+      if (parseExportSpecifier(lexerFlags, tmpExportedNames, tmpExportedBindings)) hasStringLocal = true;
 
       if (tok_getType() !== $PUNC_COMMA) break; // Must mean `}` or error
 
@@ -5229,6 +5293,8 @@ function Parser(code, options = {}) {
     }
 
     ASSERT_skipToStatementStart($PUNC_CURLY_OPEN, lexerFlags);
+
+    return hasStringLocal;
   }
   function parseExportSpecifier(lexerFlags, tmpExportedNames, tmpExportedBindings) {
     ASSERT(parseExportSpecifier.length === arguments.length, 'arg count');
@@ -5243,8 +5309,21 @@ function Parser(code, options = {}) {
     //            ^
     // - `export {a, b} from 'x'`
     //               ^
+    // - `export {"a"} from 'x'`           (arbitrary module namespace names)
+    //            ^^^
+    // - `export {"a" as b} from 'x'`      (arbitrary module namespace names)
+    //            ^^^
+    // - `export {a as "b"} from 'x'`      (arbitrary module namespace names)
+    //                 ^^^
+    // - `export {"a" as "b"} from 'x'`    (arbitrary module namespace names)
+    //            ^^^    ^^^
 
     // Start with left of the (optional) `as`
+
+    let nameIsString = isStringToken(tok_getType());
+    if (nameIsString && !allowArbitraryModuleNsNames) {
+      return THROW_RANGE('String literal export names (arbitrary module namespace names) were introduced in ES2022 but currently targeted version is lower', tok_getStart(), tok_getStop());
+    }
 
     let $tp_name_type = tok_getType();
     let $tp_name_line = tok_getLine();
@@ -5255,6 +5334,7 @@ function Parser(code, options = {}) {
 
     // Exported name is either the right of the `as`, if present at all, and otherwise same as name
 
+    let exportedNameIsString = nameIsString;
     let $tp_exportedName_type = $tp_name_type;
     let $tp_exportedName_line = tok_getLine();
     let $tp_exportedName_column = tok_getColumn();
@@ -5262,15 +5342,22 @@ function Parser(code, options = {}) {
     let $tp_exportedName_stop = tok_getStop();
     let $tp_exportedName_canon = tok_getCanoN();
 
-    ASSERT_skipAny($G_IDENT, lexerFlags);
+    ASSERT_skipAny(nameIsString ? $G_STRING : $G_IDENT, lexerFlags);
     ASSERT_VALID(tok_getType() === $ID_as || tok_getType() === $PUNC_COMMA || tok_getType() === $PUNC_CURLY_CLOSE, 'limited options, wanted `as` comma or closing curly');
 
     // while the `$tt_nameToken` should be a valid non-keyword identifier, it also has to be bound and as such we
     // don't have to check it here since we already apply bind checks anyways and binding would apply this check
     if (tok_getType() === $ID_as) { // `export {x as y}` NOT `export {x:y}`
-      ASSERT_skipToIdentOrDie($ID_as, lexerFlags);
-      // note: the exported _name_ can be any identifier, keywords included
+      // note: the exported _name_ can be any identifier or string, keywords included
+      skipAny(lexerFlags);
+      if (!isIdentToken(tok_getType()) && !isStringToken(tok_getType())) {
+        return THROW_RANGE('Next token should be an ident or string but was `' + tok_sliceInput(tok_getStart(), tok_getStop()) + '`', tok_getStart(), tok_getStop());
+      }
 
+      exportedNameIsString = isStringToken(tok_getType());
+      if (exportedNameIsString && !allowArbitraryModuleNsNames) {
+        return THROW_RANGE('String literal export names (arbitrary module namespace names) were introduced in ES2022 but currently targeted version is lower', tok_getStart(), tok_getStop());
+      }
       $tp_exportedName_type = tok_getType();
       $tp_exportedName_line = tok_getLine();
       $tp_exportedName_column = tok_getColumn();
@@ -5278,7 +5365,7 @@ function Parser(code, options = {}) {
       $tp_exportedName_stop = tok_getStop();
       $tp_exportedName_canon = tok_getCanoN();
 
-      ASSERT_skipAny($G_IDENT, lexerFlags);
+      ASSERT_skipAny(exportedNameIsString ? $G_STRING : $G_IDENT, lexerFlags);
     }
 
     if ($tp_name_type === $ID_PRIVATE_IDENT) {
@@ -5287,16 +5374,30 @@ function Parser(code, options = {}) {
     if ($tp_exportedName_type === $ID_PRIVATE_IDENT) {
       return THROW_RANGE('Private identifiers are not allowed in export specifiers', $tp_exportedName_start, $tp_exportedName_stop);
     }
+    if (nameIsString) verifyModuleExportNameStringWellFormed($tp_name_start, $tp_name_stop, $tp_name_canon);
+    if (exportedNameIsString) verifyModuleExportNameStringWellFormed($tp_exportedName_start, $tp_exportedName_stop, $tp_exportedName_canon);
 
     addNameToExports(tmpExportedNames, $tp_exportedName_start, $tp_exportedName_stop, $tp_exportedName_canon);
-    addBindingToExports(tmpExportedBindings, $tp_name_canon);
+    // When name is a string, don't add to bindings (string locals are only valid with `from`, validated later)
+    if (!nameIsString) {
+      addBindingToExports(tmpExportedBindings, $tp_name_canon);
+    }
+
+    let localNode = nameIsString
+      ? AST_getStringNode($tp_name_start, $tp_name_stop, $tp_name_line, $tp_name_column, $tp_name_canon, false)
+      : AST_getIdentNode($tp_name_start, $tp_name_stop, $tp_name_line, $tp_name_column, $tp_name_canon);
+    let exportedNode = exportedNameIsString
+      ? AST_getStringNode($tp_exportedName_start, $tp_exportedName_stop, $tp_exportedName_line, $tp_exportedName_column, $tp_exportedName_canon, false)
+      : AST_getIdentNode($tp_exportedName_start, $tp_exportedName_stop, $tp_exportedName_line, $tp_exportedName_column, $tp_exportedName_canon);
 
     AST_setClosedNode($tp_name_start, 'specifiers', {
       type: 'ExportSpecifier',
       loc: AST_getClosedLoc($tp_name_start, $tp_name_line, $tp_name_column),
-      local: AST_getIdentNode($tp_name_start, $tp_name_stop, $tp_name_line, $tp_name_column, $tp_name_canon),
-      exported: AST_getIdentNode($tp_exportedName_start, $tp_exportedName_stop, $tp_exportedName_line, $tp_exportedName_column, $tp_exportedName_canon),
+      local: localNode,
+      exported: exportedNode,
     });
+
+    return nameIsString;
   }
 
   function parseForStatement(lexerFlags, scoop, labelSet, astProp) {
@@ -5537,7 +5638,7 @@ function Parser(code, options = {}) {
     //               ^
     // [x]: `for (let() in x);`
     // [v]: `for (let().foo in x);`
-    // [x]: `for (let=10;;);`
+    // [v]: `for (let=10;;);`
     // [v]: `for (let.foo;;);`
     // [v]: `for (let();;);`
     // [x]: `for (let.foo of x);`
@@ -5581,15 +5682,98 @@ function Parser(code, options = {}) {
     //                ^^
     // [v]: `for (using of x)` — `using` is a var name
     //                ^^
-    if ((isIdentToken($tp_usingArg_type) || $tp_usingArg_type === $PUNC_CURLY_OPEN || $tp_usingArg_type === $PUNC_BRACKET_OPEN) && tok_getNlwas() === false) {
-      if ($tp_usingArg_type === $ID_in || $tp_usingArg_type === $ID_of) {
-        // [v]: `for (using in x)` / `for (using of x)` — `using` is a var name
+    // Note: destructuring patterns ({, [) are not allowed with `using` declarations (only BindingIdentifier)
+    if (isIdentToken($tp_usingArg_type) && tok_getNlwas() === false) {
+      if ($tp_usingArg_type === $ID_in) {
+        // [v]: `for (using in x)` — `using` is a var name
         AST_setIdent(astProp, $tp_usingIdent_start, $tp_usingIdent_stop, $tp_usingIdent_line, $tp_usingIdent_column, $tp_usingIdent_canon);
         return IS_ASSIGNABLE;
       }
 
+      if ($tp_usingArg_type === $ID_of) {
+        // Disambiguation: `for (using of x)` vs `for (using of = null;;)`
+        // - `for (using of x)` — for-of where `using` is a plain variable name as LHS
+        // - `for (using of of [0, 1, 2])` — for-of where `using` is LHS, `of[0,1,2]` is iterable
+        // - `for (using of = null;;)` — C-style for with `using` declaration, `of` as binding name
+        // Per spec, the 'using of' lookahead restriction only applies to for-of/for-await-of.
+        // In a C-style for statement, `using of = ...` is a using declaration (like `let of = ...`).
+        // To disambiguate, consume `of` and check whether `=` follows.
+
+        let $tp_of_type = tok_getType();
+        let $tp_of_start = tok_getStart();
+        let $tp_of_stop = tok_getStop();
+        let $tp_of_line = tok_getLine();
+        let $tp_of_column = tok_getColumn();
+        let $tp_of_canon = tok_getCanoN();
+
+        ASSERT_skipDiv($ID_of, lexerFlags); // consume `of`; div because `of` as varname could be followed by `/` as division
+
+        if (tok_getType() === $PUNC_EQ) {
+          // [v]: `for (using of = null;;)` — C-style for with `using` declaration, `of` as binding name
+          //                    ^
+          // We already consumed `using` and `of`. Build the VariableDeclaration AST manually since
+          // parseAnyVarDeclaration expects the binding identifier to be the current token.
+
+          fatalBindingIdentCheck($tp_of_type, $tp_of_start, $tp_of_stop, $tp_of_canon, BINDING_TYPE_USING, lexerFlags);
+          SCOPE_actuallyAddBinding(lexerFlags, scoop, $tp_of_start, $tp_of_stop, $tp_of_canon, BINDING_TYPE_USING);
+
+          AST_open(astProp, {
+            type: 'VariableDeclaration',
+            loc: undefined,
+            kind: 'using',
+            declarations: [],
+          });
+
+          AST_setIdent('declarations', $tp_of_start, $tp_of_stop, $tp_of_line, $tp_of_column, $tp_of_canon);
+
+          ASSERT_skipToExpressionStart('=', lexerFlags);
+          AST_wrapClosedCustom('declarations', {
+            type: 'VariableDeclarator',
+            loc: undefined,
+            id: undefined,
+            init: undefined,
+          }, 'id');
+          parseExpression(lexerFlags | LF_IN_FOR_LHS, 'init');
+          AST_close($tp_of_start, $tp_of_line, $tp_of_column, 'VariableDeclarator');
+
+          // Handle additional declarators: `for (using of = null, x = y;;)`
+          while (tok_getType() === $PUNC_COMMA) {
+            ASSERT_skipRex(',', lexerFlags);
+            let $tp_nextBinding_start = tok_getStart();
+            let $tp_nextBinding_line = tok_getLine();
+            let $tp_nextBinding_column = tok_getColumn();
+            parseBinding(lexerFlags | LF_IN_FOR_LHS, $tp_nextBinding_start, $tp_nextBinding_line, $tp_nextBinding_column, scoop, BINDING_TYPE_USING, FROM_FOR_HEADER, ASSIGNMENT_IS_INIT, UNDEF_EXPORTS, UNDEF_EXPORTS, 'declarations');
+          }
+
+          AST_close($tp_usingIdent_start, $tp_usingIdent_line, $tp_usingIdent_column, ['VariableDeclaration', 'ExpressionStatement']);
+
+          // Current token is `;`. Return to parseForHeaderRest which wraps in ForStatement.
+          return IS_ASSIGNABLE;
+        }
+
+        // [v]: `for (using of x)` — for-of where `using` is a plain variable name as LHS
+        //                   ^  (current token, `of` already consumed)
+        // Set `using` as the LHS identifier and handle for-of inline since `of` is already consumed.
+        AST_setIdent(astProp, $tp_usingIdent_start, $tp_usingIdent_stop, $tp_usingIdent_line, $tp_usingIdent_column, $tp_usingIdent_canon);
+
+        AST_wrapClosedCustom(astProp, {
+          type: 'ForOfStatement',
+          loc: undefined,
+          left: undefined,
+          right: undefined,
+          await: false, // `for await` goes through parseForHeaderAwaitUsing, not here
+          body: undefined,
+        }, 'left');
+
+        // `of` is already consumed; parse the right-hand expression directly
+        // Note: for-of rhs is an AssignmentExpression, not SequenceExpression
+        parseExpression(lexerFlags, 'right');
+
+        // Current token is `)`. parseForHeaderRest detects this and skips.
+        return IS_ASSIGNABLE | PIGGY_BACK_FOR_USING_OF_INLINE;
+      }
+
       // [v]: `for (using x of y)` — this is a using declaration
-      // [v]: `for (using {x} of y)` / `for (using [x] of y)` — destructuring in using declaration
       parseAnyVarDeclaration(lexerFlags | LF_IN_FOR_LHS, $tp_usingIdent_start, $tp_usingIdent_line, $tp_usingIdent_column, scoop, BINDING_TYPE_USING, FROM_FOR_HEADER, UNDEF_EXPORTS, UNDEF_EXPORTS, astProp);
 
       // [x]: `for (using x in y)` — for-in not allowed with `using`
@@ -5641,8 +5825,9 @@ function Parser(code, options = {}) {
 
     ASSERT_skipDiv($ID_using, lexerFlags);
 
-    if ((!isIdentToken(tok_getType()) && tok_getType() !== $PUNC_CURLY_OPEN && tok_getType() !== $PUNC_BRACKET_OPEN) || tok_getNlwas() === true) {
-      return THROW_RANGE('`await using` in for-header must be followed by a binding identifier or pattern', tok_getStart(), tok_getStop());
+    // Note: destructuring patterns ({, [) are not allowed with `await using` declarations (only BindingIdentifier)
+    if (!isIdentToken(tok_getType()) || tok_getNlwas() === true) {
+      return THROW_RANGE('`await using` in for-header must be followed by a binding identifier', tok_getStart(), tok_getStop());
     }
 
     // [v]: `for (await using x of y)` — this is an await using declaration
@@ -5789,6 +5974,8 @@ function Parser(code, options = {}) {
 
     return parseValue(lexerFlags | LF_IN_FOR_LHS, ASSIGN_EXPR_IS_OK, NOT_NEW_ARG, NOT_LHSE, astProp);
   }
+
+
   function parseForHeader(lexerFlags, $tp_for_start, scoop, awaitable, astProp) {
     ASSERT(arguments.length === parseForHeader.length, 'arg count');
     ASSERT(typeof awaitable === 'boolean');
@@ -5871,8 +6058,78 @@ function Parser(code, options = {}) {
     // - `for (x;;);`
     //          ^
 
+    // `for (using of x)` disambiguation may have already fully parsed the for-of header inline
+    // (see parseForHeaderUsing). In that case the current token is already `)`.
+    if (hasAllFlags(assignable, PIGGY_BACK_FOR_USING_OF_INLINE)) {
+      return;
+    }
+
     if (tok_getType() === $ID_of) {
-      return parseForFromOf(lexerFlags, $tp_for_start, awaitable, assignable, astProp);
+      // Disambiguation: `for (async of x)` vs `for (async of => {}; ...)`
+      // The LHS `async` is already parsed as an identifier. If `of` is the for-of keyword, proceed normally.
+      // But if `of => ...` follows, this is actually `async of => {}` (an async arrow as C-style for init).
+      // We can only distinguish by consuming `of` and checking for `=>`.
+      let $tp_of_start = tok_getStart();
+      let $tp_of_stop = tok_getStop();
+      let $tp_of_line = tok_getLine();
+      let $tp_of_column = tok_getColumn();
+      let $tp_of_canon = tok_getCanoN();
+      // - `for (async of => {}; ...)` — next is `=>`
+      // - `for (async of x) ;`       — next is expression start (ident `x`)
+      // - `for (async of []) {}`     — next is expression start (`[`)
+      // - `for (async of /x/) ;`     — next is regex
+      ASSERT_skipRex($ID_of, lexerFlags); // consume `of`; rex because next could be expression start or `=>`
+      if (tok_getType() === $PUNC_EQ_GT) {
+        // - `for (async of => {}; i < 10; ++i)` — C-style for with async arrow expression
+        //                  ^^
+        // The LHS `async` ident was already emitted to AST. We need to replace it with an async arrow.
+        // Rewrite: remove the `async` ident, parse `async of => {}` as the full init expression.
+        AST_popNode(astProp);
+        parseArrowParenlessFromPunc(sansFlag(lexerFlags, LF_IN_FOR_LHS), $tp_startOfForHeader_start, $tp_startOfForHeader_line, $tp_startOfForHeader_column, $ID_of, $tp_of_start, $tp_of_stop, $tp_of_line, $tp_of_column, $tp_of_canon, ASSIGN_EXPR_IS_OK, PARAMS_ALL_SIMPLE, $ID_async, astProp);
+        // After the arrow is parsed, we're in a C-style for. Continue parsing from the current token.
+        // The arrow expression is the `init`. Now parse the rest as ForStatement.
+        AST_wrapClosedCustom(astProp, {
+          type: 'ForStatement',
+          loc: undefined,
+          init: undefined,
+          test: undefined,
+          update: undefined,
+          body: undefined,
+        }, 'init');
+        return parseForFromSemi(lexerFlags, $tp_startOfForHeader_start, $tp_startOfForHeader_line, $tp_startOfForHeader_column);
+      }
+      // - `for (async of x)` — spec says: [lookahead ∉ { let, async of }]
+      // - `for (async of []) {}` — same restriction
+      // Bare `async` as for-of LHS is banned by the spec to avoid ambiguity with `async of => ...`.
+      // Use `for ((async) of x)` or `for (async.x of x)` instead.
+      // However, `for await (async of x)` does NOT have this restriction!
+      // The spec grammar for for-await-of only has [lookahead ≠ let], not [lookahead ∉ { let, async of }].
+      // - `for (async.x of [1]) ;` — ok, LHS is member expression not bare `async`
+      // - `for ((async) of [1]) ;` — ok, LHS is parenthesized
+      // Only error when the LHS was exactly bare `async` (piggyback flag set by _parseAsync).
+      // - `for (async of x)` — PIGGY_BACK_WAS_ASYNC_OF is set → error
+      // - `for await (async of x)` — PIGGY_BACK_WAS_ASYNC_OF is set but awaitable → ok
+      // - `for (async.x of x)` — flag not set (`.x` parsed by parseValueTail) → ok
+      // - `for (\u0061sync of x)` — flag not set (escaped form not caught by _parseAsync) → ok
+      // - `for ((async) of x)` — flag not set (paren-wrapped, different parse path) → ok
+      if (!awaitable && hasAllFlags(assignable, PIGGY_BACK_WAS_ASYNC_OF)) {
+        return THROW_RANGE('Cannot use `async` as a for-of LHS because the spec forbids `[lookahead != async of]` to avoid ambiguity with `async of =>`', $tp_startOfForHeader_start, $tp_of_stop);
+      }
+      // Not bare `async`, proceed as normal for-of
+      // `of` is already consumed. Build ForOfStatement inline.
+      if (notAssignable(assignable)) {
+        return THROW_RANGE('Left part of for-of must be assignable', $tp_for_start, $tp_of_stop);
+      }
+      AST_wrapClosedCustom(astProp, {
+        type: 'ForOfStatement',
+        loc: undefined,
+        left: undefined,
+        right: undefined,
+        await: awaitable,
+        body: undefined,
+      }, 'left');
+      parseExpression(lexerFlags, 'right');
+      return;
     }
 
     if (awaitable) {
@@ -6320,7 +6577,7 @@ function Parser(code, options = {}) {
     //           ^
     ASSERT_skipToIdentCurlyClose($PUNC_CURLY_OPEN, lexerFlags);
 
-    while (isIdentToken(tok_getType())) {
+    while (isIdentToken(tok_getType()) || isStringToken(tok_getType())) {
       parseImportSpecifier(lexerFlags, scoop);
 
       if (tok_getType() !== $PUNC_COMMA) break; // Must mean `}` or error
@@ -6363,6 +6620,13 @@ function Parser(code, options = {}) {
     //            ^
     // - `import {a, b} from 'x'`
     //               ^
+    // - `import {"a" as b} from 'x'`    (arbitrary module namespace names)
+    //            ^^^
+
+    let nameIsString = isStringToken(tok_getType());
+    if (nameIsString && !allowArbitraryModuleNsNames) {
+      return THROW_RANGE('String literal import names (arbitrary module namespace names) were introduced in ES2022 but currently targeted version is lower', tok_getStart(), tok_getStop());
+    }
 
     let $tp_name_line = tok_getLine();
     let $tp_name_column = tok_getColumn();
@@ -6379,7 +6643,7 @@ function Parser(code, options = {}) {
     let $tp_local_stop = tok_getStop();
     let $tp_local_canon = tok_getCanoN();
 
-    ASSERT_skipToAsCommaCurlyClose($G_IDENT, lexerFlags);
+    ASSERT_skipToAsCommaCurlyClose(nameIsString ? $G_STRING : $G_IDENT, lexerFlags);
 
     // https://tc39.github.io/ecma262/#sec-createimportbinding
     // The concrete Environment Record method CreateImportBinding for module Environment Records creates a new initialized
@@ -6404,15 +6668,23 @@ function Parser(code, options = {}) {
       $tp_local_canon = tok_getCanoN();
 
       ASSERT_skipAny($G_IDENT, lexerFlags);
+    } else if (nameIsString) {
+      // - `import {"a"} from 'x'`  -- string imported name without `as` is invalid, must bind to a local name
+      return THROW_RANGE('Import specifiers with a string as the imported name require an `as` clause', $tp_name_start, $tp_name_stop);
     }
+    if (nameIsString) verifyModuleExportNameStringWellFormed($tp_name_start, $tp_name_stop, $tp_name_canon);
 
     fatalBindingIdentCheck($tp_local_type, $tp_local_start, $tp_local_stop, $tp_local_canon, BINDING_TYPE_CONST, lexerFlags);
     SCOPE_addLexBinding(scoop, $tp_local_start, $tp_local_stop, $tp_local_canon, BINDING_TYPE_LET, FDS_ILLEGAL);
 
+    let importedNode = nameIsString
+      ? AST_getStringNode($tp_name_start, $tp_name_stop, $tp_name_line, $tp_name_column, $tp_name_canon, false)
+      : AST_getIdentNode($tp_name_start, $tp_name_stop, $tp_name_line, $tp_name_column, $tp_name_canon);
+
     AST_setClosedNode($tp_name_start, 'specifiers', {
       type: 'ImportSpecifier',
       loc: AST_getClosedLoc($tp_name_start, $tp_name_line, $tp_name_column),
-      imported: AST_getIdentNode($tp_name_start, $tp_name_stop, $tp_name_line, $tp_name_column, $tp_name_canon),
+      imported: importedNode,
       local: AST_getIdentNode($tp_local_start, $tp_local_stop, $tp_local_line, $tp_local_column, $tp_local_canon),
     });
   }
@@ -6731,8 +7003,9 @@ function Parser(code, options = {}) {
 
     ASSERT_skipDiv($ID_using, lexerFlags); // div; if using is varname then next token can be next line statement start and if that starts with forward slash it's a div
 
-    // `using` is a declaration when followed by an ident, `{`, or `[` on the same line (no newline)
-    if ((isIdentToken(tok_getType()) || tok_getType() === $PUNC_CURLY_OPEN || tok_getType() === $PUNC_BRACKET_OPEN) && tok_getNlwas() === false) {
+    // `using` is a declaration when followed by an ident on the same line (no newline)
+    // Note: destructuring patterns ({, [) are not allowed with `using` declarations (only BindingIdentifier)
+    if (isIdentToken(tok_getType()) && tok_getNlwas() === false) {
       parseAnyVarDeclaration(lexerFlags, $tp_using_start, $tp_using_line, $tp_using_column, scoop, BINDING_TYPE_USING, FROM_STATEMENT_START, UNDEF_EXPORTS, UNDEF_EXPORTS, astProp);
     }
     else {
@@ -6781,8 +7054,9 @@ function Parser(code, options = {}) {
 
     ASSERT_skipDiv($ID_using, lexerFlags);
 
-    // `await using` is a declaration when followed by an ident, `{`, or `[` on the same line (no newline after `using`)
-    if ((isIdentToken(tok_getType()) || tok_getType() === $PUNC_CURLY_OPEN || tok_getType() === $PUNC_BRACKET_OPEN) && tok_getNlwas() === false) {
+    // `await using` is a declaration when followed by an ident on the same line (no newline after `using`)
+    // Note: destructuring patterns ({, [) are not allowed with `await using` declarations (only BindingIdentifier)
+    if (isIdentToken(tok_getType()) && tok_getNlwas() === false) {
       parseAnyVarDeclaration(lexerFlags, $tp_await_start, $tp_await_line, $tp_await_column, scoop, BINDING_TYPE_AWAIT_USING, FROM_STATEMENT_START, UNDEF_EXPORTS, UNDEF_EXPORTS, astProp);
     }
     else {
@@ -6829,6 +7103,10 @@ function Parser(code, options = {}) {
     let $tp_return_column = tok_getColumn();
     let $tp_return_start = tok_getStart();
 
+    if (hasAllFlags(lexerFlags, LF_IN_STATIC_BLOCK)) {
+      // ClassStaticBlockStatementList: StatementList[~Return] -- return is never allowed in static blocks
+      return THROW_RANGE('Cannot use `return` in a class static block', $tp_return_start, $tp_return_start + 1);
+    }
     if (!allowGlobalReturn && hasAllFlags(lexerFlags, LF_IN_GLOBAL)) {
       return THROW_RANGE('Not configured to parse `return` statement in global, bailing', $tp_return_start, $tp_return_start + 1);
     }
@@ -6934,8 +7212,9 @@ function Parser(code, options = {}) {
       }
 
       ASSERT_skipToStatementStart(':', lexerFlags);
+      // `using`/`await using` not allowed directly in switch case/default clause
       while (tok_getType() !== $PUNC_CURLY_CLOSE && tok_getType() !== $ID_case && tok_getType() !== $ID_default) {
-        parseNestedBodyPart(lexerFlags, scoop, labelSet, NOT_LABELLED, FDS_LEX, PARENT_NOT_LABEL, 'consequent');
+        parseNestedBodyPart(lexerFlags, scoop, labelSet, NOT_LABELLED, FDS_SWITCH_CASE, PARENT_NOT_LABEL, 'consequent');
       }
 
       AST_close($tp_caseDefault_start, $tp_caseDefault_line, $tp_caseDefault_column, 'SwitchCase');
@@ -7141,7 +7420,7 @@ function Parser(code, options = {}) {
     AST_close($tp_while_start, $tp_while_line, $tp_while_column, 'WhileStatement');
   }
 
-  function parseIdentLabelOrExpressionStatement(lexerFlags, scoop, labelSet, fdState, nestedLabels, astProp) {
+  function parseIdentLabelOrExpressionStatement(lexerFlags, scoop, labelSet, isLabelled, fdState, nestedLabels, astProp) {
     ASSERT(parseIdentLabelOrExpressionStatement.length === arguments.length, 'arg count');
     ASSERT(isIdentToken(tok_getType()), 'should not have consumed the ident yet');
     ASSERT(typeof astProp === 'string', 'should be string');
@@ -7182,8 +7461,10 @@ function Parser(code, options = {}) {
     }
 
     // `await using x = expr;` — only when `await` is a keyword (async context or module toplevel)
-    // Not allowed as a substatement (like `if (x) await using y = z;`)
-    if ($tp_ident_type === $ID_await && allowUsingDeclaration && tok_getType() === $ID_using && tok_getNlwas() === false && fdState !== FDS_ILLEGAL && fdState !== FDS_IFELSE) {
+    // [x]: `if (x) await using y = z;` — not allowed as a substatement
+    // [x]: `switch (x) { case 0: await using y = z; }` — not allowed directly in switch case
+    // [x]: `label: await using y = z;` — not allowed in labeled statement position
+    if ($tp_ident_type === $ID_await && allowUsingDeclaration && tok_getType() === $ID_using && tok_getNlwas() === false && isLabelled !== IS_LABELLED && fdState !== FDS_ILLEGAL && fdState !== FDS_IFELSE && fdState !== FDS_SWITCH_CASE) {
       if (hasAnyFlag(lexerFlags, LF_IN_ASYNC) || (allowToplevelAwait && goalMode === GOAL_MODULE && hasAnyFlag(lexerFlags, LF_NOT_IN_FUNC))) {
         parseAwaitUsingDeclaration(lexerFlags, $tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, scoop, astProp);
         return;
@@ -7477,6 +7758,11 @@ function Parser(code, options = {}) {
 
     let mustHaveInit = false;
     let paramSimple = PARAM_UNDETERMINED; // simple if "valid in es5" (list of idents, no inits)
+
+    // `using`/`await using` only allow BindingIdentifier, not destructuring patterns
+    if ((bindingType === BINDING_TYPE_USING || bindingType === BINDING_TYPE_AWAIT_USING) && !isIdentToken(tok_getType())) {
+      return THROW_RANGE('Destructuring patterns are not allowed in `' + (bindingType === BINDING_TYPE_USING ? 'using' : 'await using') + '` declarations, only plain identifiers', tok_getStart(), tok_getStop());
+    }
 
     if (isIdentToken(tok_getType())) {
       // - `var foo = bar;`
@@ -8274,7 +8560,7 @@ function Parser(code, options = {}) {
     }
     return assignableForPiggies;
   }
-  function _parseExpressions(lexerFlags, $tp_startOfFirstExpr_start, $tp_startOfFirstExpr_line, $tp_startOfFirstExpr_colun, assignableForPiggies, astProp, allowSpread = false) {
+  function _parseExpressions(lexerFlags, $tp_startOfFirstExpr_start, $tp_startOfFirstExpr_line, $tp_startOfFirstExpr_column, assignableForPiggies, astProp, allowSpread = false) {
     ASSERT(arguments.length === _parseExpressions.length, 'arg count');
     ASSERT(tok_getType() === $PUNC_COMMA, 'confirm at callsite');
     AST_wrapClosedIntoArrayCustom(astProp, {
@@ -8283,7 +8569,7 @@ function Parser(code, options = {}) {
       expressions: undefined,
     }, 'expressions');
     assignableForPiggies = __parseExpressions(lexerFlags, assignableForPiggies, 'expressions', allowSpread);
-    AST_close($tp_startOfFirstExpr_start, $tp_startOfFirstExpr_line, $tp_startOfFirstExpr_colun, 'SequenceExpression');
+    AST_close($tp_startOfFirstExpr_start, $tp_startOfFirstExpr_line, $tp_startOfFirstExpr_column, 'SequenceExpression');
     return assignableForPiggies; // since we asserted a comma, we can be certain about this
   }
   function __parseExpressions(lexerFlags, assignableForPiggies, astProp, allowSpread) {
@@ -13401,7 +13687,7 @@ function Parser(code, options = {}) {
 
     let isPrivate = $tp_key_type === $ID_PRIVATE_IDENT;
     checkClassFieldNameErrors(isPrivate, isStatic, $tp_key_canon, $tp_key_start, $tp_key_stop);
-    if (isPrivate) declarePrivateName($tp_key_canon, PRIVATE_KIND_OTHER, $tp_key_start, $tp_key_stop);
+    if (isPrivate) declarePrivateName($tp_key_canon, PRIVATE_KIND_OTHER, isStatic, $tp_key_start, $tp_key_stop);
 
     let keyNode = $tp_key_type === $ID_PRIVATE_IDENT
       ? AST_getPrivateIdentNode($tp_key_start, $tp_key_stop, $tp_key_line, $tp_key_column, $tp_key_canon)
@@ -13476,7 +13762,7 @@ function Parser(code, options = {}) {
         return THROW_RANGE('Class field declarations without initializer are not supported in the currently targeted language version', $tp_ident_start, tok_getStop());
       }
       checkClassFieldNameErrors(isPrivate, isStatic, $tp_ident_canon, $tp_ident_start, $tp_ident_stop);
-      if (isPrivate) declarePrivateName($tp_ident_canon, PRIVATE_KIND_OTHER, $tp_ident_start, $tp_ident_stop);
+      if (isPrivate) declarePrivateName($tp_ident_canon, PRIVATE_KIND_OTHER, isStatic, $tp_ident_start, $tp_ident_stop);
 
       let keyNode = $tp_ident_type === $ID_PRIVATE_IDENT
         ? AST_getPrivateIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon)
@@ -13523,12 +13809,50 @@ function Parser(code, options = {}) {
         // The next token may now only be the key
         // - `class x {get key(){}}`
         //                 ^
+        // ASI: if there was a newline and the next token is `*`, treat `get` as a field name
+        // - `class x {get \n *a(){}}` => field `get` + generator method `*a(){}`
+        if (tok_getNlwas() === true && tok_getType() === $PUNC_STAR) {
+          if (!allowPublicClassFields) {
+            return THROW_RANGE('Class field declarations without initializer are not supported in the currently targeted language version', $tp_ident_start, tok_getStop());
+          }
+          checkClassFieldNameErrors(false, isStatic, $tp_ident_canon, $tp_ident_start, $tp_ident_stop);
+          let keyNode = AST_getIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon);
+          AST_open(astProp, {
+            type: 'PropertyDefinition',
+            loc: undefined,
+            key: keyNode,
+            value: null,
+            computed: false,
+            static: isStatic,
+          });
+          AST_close($tp_methodStart_start, $tp_methodStart_line, $tp_methodStart_column, 'PropertyDefinition');
+          return CANT_DESTRUCT;
+        }
         $tp_get_type = $ID_get;
         break;
       case $ID_set:
         // The next token may now only be the key
-        // - `class x {get key(){}}`
+        // - `class x {set key(v){}}`
         //                 ^
+        // ASI: if there was a newline and the next token is `*`, treat `set` as a field name
+        // - `class x {set \n *a(x){}}` => field `set` + generator method `*a(x){}`
+        if (tok_getNlwas() === true && tok_getType() === $PUNC_STAR) {
+          if (!allowPublicClassFields) {
+            return THROW_RANGE('Class field declarations without initializer are not supported in the currently targeted language version', $tp_ident_start, tok_getStop());
+          }
+          checkClassFieldNameErrors(false, isStatic, $tp_ident_canon, $tp_ident_start, $tp_ident_stop);
+          let keyNode = AST_getIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon);
+          AST_open(astProp, {
+            type: 'PropertyDefinition',
+            loc: undefined,
+            key: keyNode,
+            value: null,
+            computed: false,
+            static: isStatic,
+          });
+          AST_close($tp_methodStart_start, $tp_methodStart_line, $tp_methodStart_column, 'PropertyDefinition');
+          return CANT_DESTRUCT;
+        }
         $tp_set_type = $ID_set;
         break;
       case $ID_async:
@@ -13574,7 +13898,7 @@ function Parser(code, options = {}) {
             return THROW_RANGE('Class field declarations without initializer are not supported in the currently targeted language version', $tp_ident_start, tok_getStop());
           }
           checkClassFieldNameErrors(isPrivate, isStatic, $tp_ident_canon, $tp_ident_start, $tp_ident_stop);
-          if (isPrivate) declarePrivateName($tp_ident_canon, PRIVATE_KIND_OTHER, $tp_ident_start, $tp_ident_stop);
+          if (isPrivate) declarePrivateName($tp_ident_canon, PRIVATE_KIND_OTHER, isStatic, $tp_ident_start, $tp_ident_stop);
           let keyNode = isPrivate
             ? AST_getPrivateIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon)
             : AST_getIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon);
@@ -13717,7 +14041,7 @@ function Parser(code, options = {}) {
     if (isPrivateKey) {
       // If `kind` is "getset" then we'll have seen both the getter and setter already and seeing either again is still a dupe error.
       let privateKind = (kind === 'get') ? PRIVATE_KIND_GETTER : (kind === 'set') ? PRIVATE_KIND_SETTER : PRIVATE_KIND_OTHER;
-      declarePrivateName($tp_key_canon, privateKind, $tp_key_start, $tp_key_stop);
+      declarePrivateName($tp_key_canon, privateKind, isStatic, $tp_key_start, $tp_key_stop);
     }
 
     // - `class A {async get foo(){}}`

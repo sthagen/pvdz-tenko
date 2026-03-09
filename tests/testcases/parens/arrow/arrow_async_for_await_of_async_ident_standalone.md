@@ -6,11 +6,7 @@
 >
 > ::> arrow async for await of async ident standalone
 >
-> for-await-of with async as LHS, top-level (module or async function)
->
-> > :: parens : arrow
->
-> > ::> for await (async of iterable) at top level
+> bare async as for-await-of LHS is valid; the [lookahead != async of] restriction only applies to for-of, not for-await-of
 
 ## PASS
 

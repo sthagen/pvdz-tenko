@@ -21,6 +21,7 @@ const VERSION_OPTIONAL_CHAINING = 11; // ES2020
 const VERSION_NULLISH_COALESCING = 11; // ES2020
 const VERSION_LOGICAL_ASSIGNMENT = 12; // ES2021 (&&=, ||=, ??=)
 const VERSION_TOPLEVEL_AWAIT = 13; // ES2022
+const VERSION_ARBITRARY_MODULE_NS_NAMES = 13; // ES2022 (string literals as import/export names)
 const VERSION_REGEX_DUPLICATE_NAMED_GROUPS = 16; // ES2025 MightBothParticipate
 const VERSION_IMPORT_ATTRIBUTES = 16; // ES2025
 const VERSION_WHATEVER = Infinity;
@@ -76,6 +77,8 @@ const PIGGY_BACK_WAS_CONSTRUCTOR = 1 << 8; // signal having found a constructor 
 const PIGGY_BACK_WAS_PROTO = 1 << 9; // signal that a `__proto__: x` was parsed (do detect double occurrence)
 const PIGGY_BACK_WAS_ARROW = 1 << 10; // signal that double proto was found on object; error in web compat outside of arrow headers
 const PIGGY_BACK_WAS_PRIVATE_IDENT = 1 << 11; // signal that the value was a bare PrivateIdentifier (#x), needs to be consumed by `in`
+const PIGGY_BACK_WAS_ASYNC_OF = 1 << 12; // signal that LHS was bare `async` followed by `of` in for-header (spec: [lookahead != async of])
+const PIGGY_BACK_FOR_USING_OF_INLINE = 1 << 13; // signal that `for (using of x)` for-of was fully parsed inline by parseForHeaderUsing
 const NO_SPREAD = DEVONLY() ? {NO_SPREAD: 1} : 0;
 const LAST_SPREAD = DEVONLY() ? {LAST_SPREAD: 1} : 1;
 const MID_SPREAD = DEVONLY() ? {MID_SPREAD: 1} : 2;
@@ -107,6 +110,7 @@ const FDS_ILLEGAL = DEVONLY() ? {FDS_ILLEGAL: 1} : 1; // function declaration no
 const FDS_IFELSE = DEVONLY() ? {FDS_IFELSE: 2} : 2;  // if-else specific webcompat exception would apply to a function declaration
 const FDS_LEX = DEVONLY() ? {FDS_LEX: 3} : 3;      // a function declaration would be a lexical binding
 const FDS_VAR = DEVONLY() ? {FDS_VAR: 4} : 4;      // a function declaration would be a var binding
+const FDS_SWITCH_CASE = DEVONLY() ? {FDS_SWITCH_CASE: 5} : 5; // directly inside switch case/default clause (using/await using not allowed here)
 const IS_GLOBAL_TOPLEVEL = DEVONLY() ? {IS_GLOBAL_TOPLEVEL: 1} : true;
 const NOT_GLOBAL_TOPLEVEL = DEVONLY() ? {NOT_GLOBAL_TOPLEVEL: 1} : false;
 const IS_LABELLED = DEVONLY() ? {IS_LABELLED: 1} : true;
@@ -161,6 +165,8 @@ const PIGGIES = (0
   | PIGGY_BACK_WAS_PROTO
   | PIGGY_BACK_WAS_ARROW
   | PIGGY_BACK_WAS_PRIVATE_IDENT
+  | PIGGY_BACK_WAS_ASYNC_OF
+  | PIGGY_BACK_FOR_USING_OF_INLINE
 );
 function getPiggies(flags) {
   return flags & PIGGIES;
@@ -191,6 +197,14 @@ function P(f, arr) {
     arr.push('PIGGY_BACK_WAS_PRIVATE_IDENT');
     f ^= PIGGY_BACK_WAS_PRIVATE_IDENT;
   }
+  if (f & PIGGY_BACK_WAS_ASYNC_OF) {
+    arr.push('PIGGY_BACK_WAS_ASYNC_OF');
+    f ^= PIGGY_BACK_WAS_ASYNC_OF;
+  }
+  if (f & PIGGY_BACK_FOR_USING_OF_INLINE) {
+    arr.push('PIGGY_BACK_FOR_USING_OF_INLINE');
+    f ^= PIGGY_BACK_FOR_USING_OF_INLINE;
+  }
   return f;
 }
 
@@ -210,6 +224,7 @@ export {
   VERSION_NULLISH_COALESCING,
   VERSION_LOGICAL_ASSIGNMENT,
   VERSION_TOPLEVEL_AWAIT,
+  VERSION_ARBITRARY_MODULE_NS_NAMES,
   VERSION_REGEX_DUPLICATE_NAMED_GROUPS,
   VERSION_IMPORT_ATTRIBUTES,
   VERSION_WHATEVER,
@@ -279,6 +294,8 @@ export {
   PIGGY_BACK_WAS_PROTO,
   PIGGY_BACK_WAS_ARROW,
   PIGGY_BACK_WAS_PRIVATE_IDENT,
+  PIGGY_BACK_WAS_ASYNC_OF,
+  PIGGY_BACK_FOR_USING_OF_INLINE,
   NO_SPREAD,
   LAST_SPREAD,
   MID_SPREAD,
@@ -322,6 +339,7 @@ export {
   FDS_IFELSE,
   FDS_LEX,
   FDS_VAR,
+  FDS_SWITCH_CASE,
   IS_GLOBAL_TOPLEVEL,
   NOT_GLOBAL_TOPLEVEL,
   IS_LABELLED,
