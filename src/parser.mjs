@@ -836,6 +836,7 @@ function Parser(code, options = {}) {
   let _pnames;
   ASSERT(_pnames = ['ROOT'], '(dev-only verification and debugging tool)');
   if (options_astRoot) {
+    if (typeof options_astRoot !== 'object') throw new Error('astRoot should be the root object to enhance, not some primitive');
     options_astRoot.root = _tree;
     options_astRoot.path = _path;
     ASSERT(options_astRoot.pathNames = _pnames, '(dev-only verification and debugging tool)');
