@@ -563,7 +563,8 @@ const U17_ID_CONTINUE_ONLY = [
 ];
 function isInU17Ranges(c, ranges) {
   // Binary search on sorted range pairs [start, end]
-  let lo = 0, hi = ranges.length - 1;
+  let lo = 0;
+  let hi = ranges.length - 1;
   while (lo <= hi) {
     let mid = (lo + hi) >> 1;
     let r = ranges[mid];
