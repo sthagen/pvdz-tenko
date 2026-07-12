@@ -389,6 +389,7 @@ import {
   VERSION_EXPORT_STAR_AS,
   VERSION_IMPORT_META,
   VERSION_TOPLEVEL_AWAIT,
+  VERSION_DUP_PROTO_MAIN,
   VERSION_ARBITRARY_MODULE_NS_NAMES,
   VERSION_IMPORT_ATTRIBUTES,
   VERSION_WHATEVER,
@@ -706,6 +707,17 @@ function Parser(code, options = {}) {
   let allowArbitraryModuleNsNames = (targetEsVersion >= VERSION_ARBITRARY_MODULE_NS_NAMES || targetEsVersion === VERSION_WHATEVER); // ES2022 string literals as import/export names
   let allowUsingDeclaration = !!options_allowUsingDeclaration; // Explicit opt-in flag (not tied to ES version)
   let allowImportAttributes = (targetEsVersion >= VERSION_IMPORT_ATTRIBUTES || targetEsVersion === VERSION_WHATEVER); // ES2025
+  // Annex B "Runtime Errors for Function Call Assignment Targets" (living spec B.3.9). This codifies web reality
+  // dating back to ES5, where `LeftHandSideExpression : CallExpression` made `f() = x` syntactically legal and
+  // PutValue threw a runtime ReferenceError. ES2015 turned it into an early (Reference) error in the main body but
+  // web browsers kept the ES5 behavior for sloppy code; the annex restores it: no early error, runtime ReferenceError.
+  // Covers `=`, compound assignment, update expressions, and for-in/of heads; explicitly NOT the logical assignment
+  // operators (`??=`, `&&=`, `||=`) per its note, and web-compat is not `simple` so destructuring targets still reject.
+  // https://tc39.es/ecma262/#sec-runtime-errors-for-function-call-assignment-targets
+  let allowCallAssignmentTarget = options_webCompat === WEB_COMPAT_ON;
+  // ES2022 moved the duplicate `__proto__` early error from Annex B.3.1 into the main body (13.2.5.1), so from
+  // es13 on it applies in every mode; when targeting ES2021 or lower it is Annex B and only applies in webcompat mode.
+  let checkDupProto = (targetEsVersion >= VERSION_DUP_PROTO_MAIN || targetEsVersion === VERSION_WHATEVER) || options_webCompat === WEB_COMPAT_ON;
 
   // Private name scope tracking (AllPrivateIdentifiersValid, no duplicate private bound names)
   // Stack of {declared: Map<name, kind_bitmask>, uses: [{name, start, stop}]}
@@ -788,11 +800,15 @@ function Parser(code, options = {}) {
     // - `class C { x = 1; }`                          ident field init
     // - `class C { 'key' = 1; }`                      literal field init
     // - `class C { [expr] = 1; }`                     computed field init
-    ASSERT_skipAny($PUNC_EQ, lexerFlags);
+    // The `=` is followed by an AssignmentExpression, so the next `/` must be lexed as a regex, not division.
+    // (`class C { r = /^a/g; }` — regex field init). Use skipRex, not skipAny which assumes division.
+    ASSERT_skipToExpressionStart($PUNC_EQ, lexerFlags);
     // Field initializers create a new function boundary that is neither async nor a generator.
     // `async function f() { class C { x = await; } }` — await is an identifier, not AwaitExpression
     // `function* g() { class C { x = yield; } }` — yield is an identifier, not YieldExpression
-    let fieldFlags = sansFlag(lexerFlags, LF_IN_ASYNC | LF_IN_GENERATOR) | LF_IN_CLASS_FIELD_INIT;
+    // new.target is allowed in a field initializer (evaluates to undefined at runtime), like a static block.
+    // - `class C { t = new.target === undefined; }`         ok, new.target is allowed
+    let fieldFlags = sansFlag(lexerFlags, LF_IN_ASYNC | LF_IN_GENERATOR) | LF_IN_CLASS_FIELD_INIT | LF_CAN_NEW_DOT_TARGET;
     let $tp_value_start = tok_getStart();
     let $tp_value_line = tok_getLine();
     let $tp_value_column = tok_getColumn();
@@ -1421,9 +1437,10 @@ function Parser(code, options = {}) {
     let head = _path[_path.length - 1];
     let prev = head && head[astProp];
 
-    // Annex B: In sloppy+webcompat, CallExpression is a valid update target (runtime error, not syntax error)
+    // ES2026 draft Annex B.3.9: in sloppy web-compat code a CallExpression is a valid update target (the update
+    // throws a runtime ReferenceError instead of being an early error)
     // https://tc39.es/ecma262/#sec-runtime-errors-for-function-call-assignment-targets
-    let allowCall = hasNoFlag(lexerFlags, LF_STRICT_MODE) && options_webCompat === WEB_COMPAT_ON;
+    let allowCall = allowCallAssignmentTarget && hasNoFlag(lexerFlags, LF_STRICT_MODE);
 
     // Note: the for-case is nasty because when parsing the lhs the AST is not yet populated with a `for` statement
     // because that particular node type depends on `in`, `of`, or a semi. So the AST could be an array (block body)
@@ -1438,10 +1455,10 @@ function Parser(code, options = {}) {
       )
     ) {
       // - `++[]`
-      // - `--f()`      (strict or no webcompat)
+      // - `--f()`      (strict, no webcompat, or es<=16)
       // - `++this`
       // - `[]++`
-      // - `f()--`      (strict or no webcompat)
+      // - `f()--`      (strict, no webcompat, or es<=16)
       // - `this++`
       return THROW_RANGE('Can only increment or decrement an identifier or member expression', tok_getStart(), tok_getStop());
     }
@@ -4328,7 +4345,10 @@ function Parser(code, options = {}) {
     });
 
     // - `await ()=>x` is an error (arrows are assignable)
-    parseValue(lexerFlags, ASSIGN_EXPR_IS_ERROR, NOT_NEW_ARG, NOT_LHSE, 'argument'); // await expr arg is never optional
+    let argAssignable = parseValue(lexerFlags, ASSIGN_EXPR_IS_ERROR, NOT_NEW_ARG, NOT_LHSE, 'argument'); // await expr arg is never optional
+
+    // [x]: `await #x in obj` — a bare PrivateIdentifier must be the entire lhs of `in`, it can not be an await arg
+    if (hasAllFlags(argAssignable, PIGGY_BACK_WAS_PRIVATE_IDENT)) return THROW_RANGE('A PrivateIdentifier is only valid as the entire left-hand side of an `in` expression, it can not be the arg of `await`', $tp_await_start, tok_getStart());
 
     if (tok_getType() === $PUNC_STAR_STAR) {
       return THROW_RANGE('The lhs of ** can not be this kind of unary expression (syntactically not allowed, you have to wrap something)', tok_getStart(), tok_getStop());
@@ -4448,7 +4468,10 @@ function Parser(code, options = {}) {
     while (tok_getType() !== $PUNC_CURLY_CLOSE) {
       parseNestedBodyPart(lexerFlagsNoTemplate, scoop, EMPTY_LABEL_SET, NOT_LABELLED, FDS_LEX, PARENT_NOT_LABEL, 'body');
     }
-    ASSERT_skipToStatementStart($PUNC_CURLY_CLOSE, lexerFlags);
+    // Back in the class body after the static block: the next token is a class element key (may be `*` `#` `[`
+    // `get` `static` `;` `}`), not a statement start. Consume the `}` with skipDiv like a method body does, else a
+    // following generator method (`static{}*m(){}`) trips the statement-start assertion.
+    ASSERT_skipDiv($PUNC_CURLY_CLOSE, lexerFlags);
     AST_close($tp_curly_start, $tp_curly_line, $tp_curly_column, 'StaticBlock');
     return CANT_DESTRUCT;
   }
@@ -5564,11 +5587,14 @@ function Parser(code, options = {}) {
         return IS_ASSIGNABLE; // the `let` variable name is assignable
       }
 
-      if ($tp_letArg_type === $ID_of) {
-        // [x]: `for (let of y);`
-        //                ^^
-        return THROW_RANGE('A `for (let of ...)` is always illegal', $tp_for_start, $tp_letArg_stop);
-      }
+      // Note: `of` is a valid BindingIdentifier (a contextual keyword, not reserved), so when the token after `let`
+      // is `of` it is the *binding name*, not the for-of keyword. The real of/in keyword (or `=`/`;`/`,`) follows it.
+      // - `for (let of of y);`   ok: bind `of`, iterate `y` (for-of)
+      // - `for (let of in y);`   ok: bind `of` (for-in)
+      // - `for (let of;;);`      ok: bind `of`, C-style
+      // - `for (let of y);`      error: after binding `of` there is no valid of/in/=/;/, (handled downstream)
+      // (Treating `let` itself as a for-of binding-expression, i.e. `for (let of y)` as `(let) of (y)`, stays illegal
+      //  via the grammar's `[lookahead ≠ let]`; that is the single-`of` case which still fails below.)
 
       // [v]: `for (let x of y);`
       //                ^
@@ -5624,7 +5650,8 @@ function Parser(code, options = {}) {
     // [x]: `for (let() of y);`
     // [v]: `for (let();;);`
 
-    ASSERT($tp_letArg_type !== $PUNC_BRACKET_CLOSE, 'case handled above');
+    // Note:  is handled above, but  (BRACKET_CLOSE) is NOT: in sloppy mode  is  as a var name
+    // then a stray , which the expression fallback below parses and reports as a normal error.
     ASSERT($tp_letArg_type !== $ID_in, 'case handled above');
     ASSERT($tp_letArg_type !== $ID_of, 'case handled above');
 
@@ -8380,6 +8407,14 @@ function Parser(code, options = {}) {
 
     let $tp_eq_type = tok_getType();
 
+    // ES2026 draft Annex B.3.9 note: the web-compat allowance for a function call as assignment target covers `=`
+    // and the compound AssignmentOperator forms but explicitly NOT the logical assignment operators.
+    // The CANT_DESTRUCT rider on an assignable lhs uniquely marks a web-compat call target (see _parseValueTailCall).
+    // - `f() ??= x` / `f() &&= x` / `f() ||= x` (error even in sloppy web-compat)
+    if (hasAllFlags(lhsAssignable, CANT_DESTRUCT) && ($tp_eq_type === $PUNC_AND_AND_EQ || $tp_eq_type === $PUNC_OR_OR_EQ || $tp_eq_type === $PUNC_QMARK_QMARK_EQ)) {
+      return THROW_RANGE('Cannot use a function call as the target of a logical assignment operator (the web compat allowance only covers `=` and compound assignments)', tok_getStart(), tok_getStop());
+    }
+
     AST_convertArrayToPattern($tp_eq_type, astProp)
 
     // Note: assignment to object/array is caught elsewhere
@@ -8418,6 +8453,8 @@ function Parser(code, options = {}) {
         repeat = true;
       }
       else if (isNonAssignBinOp($tp_next_type, lexerFlags)) {
+        // A bare PrivateIdentifier (`#x in obj`) is consumed by the `in` op that has it as its lhs, so drop the signal
+        if ($tp_next_type === $ID_in && hasAllFlags(assignable, PIGGY_BACK_WAS_PRIVATE_IDENT)) assignable = sansFlag(assignable, PIGGY_BACK_WAS_PRIVATE_IDENT);
         let nowAssignable = parseExpressionFromBinaryOpOnlyStronger(lexerFlags, $tp_firstExpr_start, $tp_firstExpr_line, $tp_firstExpr_column, COAL_SEEN_NEITHER, astProp);
         assignable = setNotAssignable(nowAssignable | assignable);
         repeat = true;
@@ -8489,13 +8526,19 @@ function Parser(code, options = {}) {
     // for if the previous op was also `**` (and we don't need other checks because it is the strongest binary op).
     let otherStrength = getStrength($tp_op_type, $tp_op_start, $tp_op_stop);
     while (continueParsingBinOp(lexerFlags, otherStrength)) {
+      // If the rhs was a bare PrivateIdentifier (`a || #x in obj`) then the stronger `in` op we are about to
+      // parse has it as its lhs and consumes it, so drop the signal before it trips the check below.
+      if (tok_getType() === $ID_in && hasAllFlags(assignable, PIGGY_BACK_WAS_PRIVATE_IDENT)) assignable = sansFlag(assignable, PIGGY_BACK_WAS_PRIVATE_IDENT);
       assignable |= parseExpressionFromBinaryOpOnlyStronger(lexerFlags, $tp_rightExprStart_start, $tp_rightExprStart_line, $tp_rightExprStart_column, coalSeen,'right');
     }
 
     // Spec: `PrivateIdentifier in ShiftExpression` — the RHS is ShiftExpression, not RelationalExpression.
     // A bare PrivateIdentifier is not a valid ShiftExpression, so `#x in #y in z` is a SyntaxError.
+    // Also reached when the op binds at least as strong as `in`, like `x + #y in z`, where the private
+    // ident becomes an operand of that op instead of the entire lhs of the `in`, which is also a SyntaxError.
     if (hasAllFlags(assignable, PIGGY_BACK_WAS_PRIVATE_IDENT)) {
-      return THROW_RANGE('A PrivateIdentifier is not a valid RHS for `in`; the RHS of `PrivateIdentifier in` is ShiftExpression', $tp_rightExprStart_start, tok_getStart());
+      if ($tp_op_type === $ID_in) return THROW_RANGE('A PrivateIdentifier is not a valid RHS for `in`; the RHS of `PrivateIdentifier in` is ShiftExpression', $tp_rightExprStart_start, tok_getStart());
+      return THROW_RANGE('A PrivateIdentifier is only valid as the entire left-hand side of an `in` expression, it can not be an operand of `' + tok_sliceInput($tp_op_start, $tp_op_stop) + '`', $tp_rightExprStart_start, tok_getStart());
     }
 
     // Can't parse `||` or `&&` _after_ `??` on same level so don't have to check this inside the loop
@@ -9369,6 +9412,10 @@ function Parser(code, options = {}) {
     // Note: `new import.meta` is valid; only `new import(...)` (dynamic import) is invalid
     // Note: the `isNewArg` state will make sure the `parseValueTail` function properly deals with the first call arg
     let assignableForPiggies = parseValue(lexerFlags, ASSIGN_EXPR_IS_ERROR, IS_NEW_ARG, NOT_LHSE, 'callee');
+
+    // [x]: `new #x in obj` — a bare PrivateIdentifier must be the entire lhs of `in`, it can not be the callee of `new`
+    if (hasAllFlags(assignableForPiggies, PIGGY_BACK_WAS_PRIVATE_IDENT)) return THROW_RANGE('A PrivateIdentifier is only valid as the entire left-hand side of an `in` expression, it can not be the callee of `new`', $tp_new_start, tok_getStart());
+
     AST_close($tp_new_start, $tp_new_line, $tp_new_column, 'NewExpression');
     // [x]: `async function f(){ (x = new x(await x)) => {} }`
     return setNotAssignable(assignableForPiggies);
@@ -9425,6 +9472,9 @@ function Parser(code, options = {}) {
     });
     // dont parse just any standard expression. instead stop when you find any infix operator
     let assignable = parseValue(lexerFlags, ASSIGN_EXPR_IS_ERROR, NOT_NEW_ARG, NOT_LHSE, 'argument');
+
+    // [x]: `typeof #x in obj` — a bare PrivateIdentifier must be the entire lhs of `in`, it can not be a unary arg
+    if (hasAllFlags(assignable, PIGGY_BACK_WAS_PRIVATE_IDENT)) return THROW_RANGE('A PrivateIdentifier is only valid as the entire left-hand side of an `in` expression, it can not be the arg of `' + opName + '`', $tp_unary_start, tok_getStart());
 
     // <SCRUB AST>
     if (opName === 'delete') {
@@ -10034,7 +10084,9 @@ function Parser(code, options = {}) {
       object: objectNode,
       property: propertyNode,
     });
-    return parseValueTail(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, setAssignable(assignable), isNewArg, NOT_LHSE, astProp);
+    // A `.x` member tail makes the whole value a MemberExpression, whose AssignmentTargetType is `simple` even when
+    // the object is a call (`f().x`), so clear any web-compat CANT_DESTRUCT rider left by a preceding call tail.
+    return parseValueTail(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, sansFlag(setAssignable(assignable), CANT_DESTRUCT), isNewArg, NOT_LHSE, astProp);
   }
   function _parseValueTailDynamicProperty(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, assignable, isNewArg, isOptional, astProp) {
     // parseMemberExpression dynamic
@@ -10063,7 +10115,9 @@ function Parser(code, options = {}) {
 
     ASSERT_skipDiv($PUNC_BRACKET_CLOSE, lexerFlags);
     AST_close($tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, 'MemberExpression');
-    return parseValueTail(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, setAssignable(assignable), isNewArg, NOT_LHSE, astProp); // member expressions are assignable
+    // A `[x]` computed member tail makes the whole value a MemberExpression (AssignmentTargetType `simple`) even
+    // when the object is a call (`f()[0]`), so clear any web-compat CANT_DESTRUCT rider left by a call tail.
+    return parseValueTail(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, sansFlag(setAssignable(assignable), CANT_DESTRUCT), isNewArg, NOT_LHSE, astProp); // member expressions are assignable
   }
   function _parseValueTailCall(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, assignable, isNewArg, isOptional, astProp) {
     ASSERT(_parseValueTailCall.length === arguments.length, 'arg count');
@@ -10093,9 +10147,13 @@ function Parser(code, options = {}) {
     assignable = mergeAssignable(nowAssignable, assignable);
     AST_close($tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, 'CallExpression');
 
-    // Annex B: In sloppy+webcompat mode, a CallExpression is a valid assignment target (runtime error, not syntax error)
+    // ES2026 draft Annex B.3.9: in sloppy web-compat code a call is a `web-compat` assignment target — assignment,
+    // update, and for-in/of heads throw a runtime ReferenceError instead of an early error. Since web-compat is not
+    // `simple`, a call still is never a valid destructuring target (`[f()] = x`), so ride CANT_DESTRUCT along.
     // https://tc39.es/ecma262/#sec-runtime-errors-for-function-call-assignment-targets
-    let callAssignable = (hasNoFlag(lexerFlags, LF_STRICT_MODE) && options_webCompat === WEB_COMPAT_ON) ? assignable : setNotAssignable(assignable);
+    // In every ratified edition (ES2015-ES2025) the AssignmentTargetType of a call is invalid, so without the
+    // web-compat gate (or when targeting es<=16) the call is simply not assignable at all.
+    let callAssignable = (allowCallAssignmentTarget && hasNoFlag(lexerFlags, LF_STRICT_MODE)) ? (assignable | CANT_DESTRUCT) : setNotAssignable(assignable);
     return parseValueTail(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, callAssignable, isNewArg, NOT_LHSE, astProp);
   }
   function _parseValueTailTemplate(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, assignable, isNewArg, astProp) {
@@ -11398,9 +11456,10 @@ function Parser(code, options = {}) {
         AST_patchAsyncCall($tp_async_start, $tp_async_stop, $tp_async_line, $tp_async_column, $tp_async_canon, astProp);
       }
 
-      // Annex B: In sloppy+webcompat, a CallExpression is a valid assignment target (runtime error, not syntax error)
-      // https://tc39.es/ecma262/#sec-runtime-errors-for-function-call-assignment-targets
-      let asyncCallAssignable = (hasNoFlag(lexerFlags, LF_STRICT_MODE) && options_webCompat === WEB_COMPAT_ON) ? IS_ASSIGNABLE : NOT_ASSIGNABLE;
+      // A call like `async(x)` is a CallExpression; per ES2026 draft Annex B.3.9 it is a `web-compat` assignment
+      // target in sloppy web-compat code (runtime ReferenceError, not early error), but never a destructuring
+      // target, so ride CANT_DESTRUCT (see _parseValueTailCall).
+      let asyncCallAssignable = (allowCallAssignmentTarget && hasNoFlag(lexerFlags, LF_STRICT_MODE)) ? (IS_ASSIGNABLE | CANT_DESTRUCT) : NOT_ASSIGNABLE;
       let assignable = parseValueTail(lexerFlags, $tp_async_start, $tp_async_line, $tp_async_column, asyncCallAssignable, NOT_NEW_ARG, NOT_LHSE, astProp);
       if (fromStmtOrExpr === IS_STATEMENT) {
         // in expressions operator precedence is handled elsewhere. in statements this is the start,
@@ -12359,8 +12418,9 @@ function Parser(code, options = {}) {
       AST_setIdent(astProp, $tp_propLeadingIdent_start, $tp_propLeadingIdent_stop, $tp_propLeadingIdent_line, $tp_propLeadingIdent_column, $tp_propLeadingIdent_canon);
 
       let destructible = MIGHT_DESTRUCT;
-      if ($tp_propLeadingIdent_canon === '__proto__') {
-        // https://tc39.es/ecma262/#sec-__proto__-property-names-in-object-initializers (Annex B.3.1, normative)
+      if (checkDupProto && $tp_propLeadingIdent_canon === '__proto__') {
+        // https://tc39.es/ecma262/#sec-__proto__-property-names-in-object-initializers
+        // Main body 13.2.5.1 since ES2022 (all modes); Annex B.3.1 (webcompat only) when targeting ES2021 or lower
         // > "at least two of those entries were obtained from productions of the form PropertyDefinition : PropertyName : AssignmentExpression"
         destructible = PIGGY_BACK_WAS_PROTO;
       }
@@ -12783,7 +12843,10 @@ function Parser(code, options = {}) {
 
     let valueAssignable = parseValueAfterIdent(lexerFlags, $tp_ident_type, $tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon, bindingType, ASSIGN_EXPR_IS_OK, 'value');
 
-    if (notAssignable(valueAssignable)) {
+    // A web-compat call value (`{foo: fail()}`) is assignable but rides CANT_DESTRUCT: it can be a simple assignment
+    // target (`fail() = x`) but never a destructuring target (`{foo: fail()} = x`), and a default (`{foo: fail() = x}`)
+    // does not change that, so treat it as CANT_DESTRUCT rather than DESTRUCT_ASSIGN_ONLY.
+    if (notAssignable(valueAssignable) || hasAllFlags(valueAssignable, CANT_DESTRUCT)) {
       // [v]: `({foo: true / false});`
       //                   ^
 
@@ -13005,10 +13068,11 @@ function Parser(code, options = {}) {
 
       let destructible_forPiggies = MIGHT_DESTRUCT;
 
-      // https://tc39.es/ecma262/#sec-__proto__-property-names-in-object-initializers (Annex B.3.1, normative)
+      // https://tc39.es/ecma262/#sec-__proto__-property-names-in-object-initializers
+      // Main body 13.2.5.1 since ES2022 (all modes); Annex B.3.1 (webcompat only) when targeting ES2021 or lower
       // > "at least two of those entries were obtained from productions of the form PropertyDefinition : PropertyName : AssignmentExpression"
       // `{"__proto__": 1, __proto__: 2}` is still an error, only for key:value (not shorthand or methods)
-      if ($tp_lit_canon === '__proto__') {
+      if (checkDupProto && $tp_lit_canon === '__proto__') {
         destructible_forPiggies |= PIGGY_BACK_WAS_PROTO;
       }
 
@@ -14213,7 +14277,9 @@ function Parser(code, options = {}) {
     // Note: the expression of computed keys of class methods are parsed with the context before the class
     // So the context is not guaranteed to be strict, async, or anything else.
     // We have to propagate the piggies in case the parent turns out to be a function param / default.
-    let assignable_forPiggies = parseExpression(outerLexerFlags, astProp);
+    // Exception: the class's own private names are in scope in its computed keys (`class C { #x; [#x in obj](){} }`),
+    // so keep the class body signal on. The private name scope was already pushed, so undeclared names still throw.
+    let assignable_forPiggies = parseExpression(outerLexerFlags | LF_IN_CLASS_BODY, astProp);
 
     // - `async function f(){    (fail = class A {[await foo](){}; "x"(){}}) => {}    }`
     // - `(fail = class A {[await](){}; "x"(){}}) => {}`
@@ -14416,7 +14482,9 @@ function Parser(code, options = {}) {
     } else {
       assignable = parseValueTail(lexerFlags, $tp_valueStart_start, $tp_valueStart_line, $tp_valueStart_column, assignable, NOT_NEW_ARG, NOT_LHSE, astProp);
       // (If there is no tail the input assignable is returned...)
-      if (isAssignable(assignable)) {
+      // A web-compat call tail (`[x].map(y,z)`) is assignable but rides CANT_DESTRUCT: it is a valid simple
+      // assignment target yet never a destructuring target, so it must not clear the pattern's CANT_DESTRUCT.
+      if (isAssignable(assignable) && hasNoFlag(assignable, CANT_DESTRUCT)) {
         // The destructibility of the whole expression solely depends on the tail
         // For example, `foo`, `foo.bar`, `foo().bar`, `{...x}[y]`, are all assignable and therefor assign-destructible
         destructible = sansFlag(destructible, CANT_DESTRUCT | DESTRUCT_ASSIGN_ONLY | MUST_DESTRUCT);
@@ -14438,7 +14506,8 @@ function Parser(code, options = {}) {
           // - `[x.y = a] = z`
         }
       } else if (firstOpNotAssign) {
-        if (notAssignable(assignable)) {
+        // A web-compat call tail is assignable but rides CANT_DESTRUCT, so honor it here too.
+        if (notAssignable(assignable) || hasAllFlags(assignable, CANT_DESTRUCT)) {
 
           // [v]: `[...[x].map(y, z)];`
           // [x]: `[...[x].map(y, z)] = a;`
@@ -14650,8 +14719,10 @@ function Parser(code, options = {}) {
         assignable = parseExpressionFromOp(lexerFlags, $tp_argStart_start, $tp_argStart_stop, $tp_argStart_line, $tp_argStart_column, assignable, astProp);
       }
 
-      if (notAssignable(assignable)) {
+      if (notAssignable(assignable) || hasAllFlags(assignable, CANT_DESTRUCT)) {
         // `[...a+b]`
+        // A web-compat call (`f() = x` is allowed) is assignable but rides CANT_DESTRUCT because it is never a
+        // valid rest/destructuring target (`[...z()] = x`), so honor the rider even though it reports assignable.
         destructible |= CANT_DESTRUCT;
       } else if (willBeSimple) {
         // Skip dupe check because it may end up not a binding
