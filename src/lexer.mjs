@@ -512,6 +512,8 @@ import {
 } from './enum_lexer.mjs';
 import {
   VERSION_BIGINT,
+  VERSION_NUMERIC_SEPARATOR,
+  VERSION_JSON_SUPERSET,
   VERSION_OPTIONAL_CHAINING,
   VERSION_NULLISH_COALESCING,
   VERSION_LOGICAL_ASSIGNMENT,
@@ -618,6 +620,8 @@ function Lexer(
   const supportRegexVFlag = targetEsVersion >= 15 || targetEsVersion === Infinity; // ES2024: unicodeSets mode (v flag), mutually exclusive with u
   const supportHashbang = targetEsVersion >= 14 || targetEsVersion === Infinity; // ES2023: HashbangComment
   const supportBigInt = targetEsVersion >= VERSION_BIGINT || targetEsVersion === VERSION_WHATEVER;
+  const supportNumericSeparator = targetEsVersion >= VERSION_NUMERIC_SEPARATOR || targetEsVersion === VERSION_WHATEVER; // ES2021: `1_000`
+  const supportJsonSuperset = targetEsVersion >= VERSION_JSON_SUPERSET || targetEsVersion === VERSION_WHATEVER; // ES2019: unescaped <LS>/<PS> in a string literal
   // ES2022 (tc39/ecma262#2525) moved LegacyOctalEscapeSequence and NonOctalDecimalEscapeSequence (\8 \9) from
   // Annex B.1.2 into the main String Literals grammar, gated only on strictness. Before that they were Annex B
   // syntax, so when targeting ES2021 or lower they additionally require webcompat mode.
@@ -1154,7 +1158,8 @@ function Lexer(
                 return $ERROR;
               }
 
-              // Note: LF and PS are newlines that are _explicitly_ allowed in a string, so only check for LF and CR here
+              // Note: <LS> and <PS> are the newlines that a string may contain (ES2019+), so they only set
+              // hadNewline when targeting an older version; LF and CR always do.
               if (hadNewline) {
                 if (!lastReportableLexerError) lastReportableLexerError = 'Encountered newline in string which is not allowed';
                 return $ERROR;
@@ -1179,6 +1184,11 @@ function Lexer(
           case STRING_UNICODE:
             ASSERT_skip(c);
             if (c <= $$LS_2029 && c >= $$PS_2028) {
+              // The JSON superset change (ES2019) added <LS> and <PS> to DoubleStringCharacter and
+              // SingleStringCharacter. Before that they are just LineTerminators, which a string can not contain.
+              // (A `\<LS>` LineContinuation was always fine, and a template may always contain them.)
+              // - `"a<LS>b"` is fine at es10 but not at es9
+              if (!supportJsonSuperset) hadNewline = true;
               // (Increment after consumption as that's what incrementLine expects and asserts)
               // Note: this is not an error but it does increase the line counter
               incrementLine();
@@ -1610,11 +1620,19 @@ function Lexer(
       }
 
       if (c === $$CR_0D) {
+        // Both TV (the cooked value) and TRV (the raw value) normalize a <CR> and a <CR><LF> to a single <LF>, so
+        // the source CR must not end up in the canonized value. Flush what we have and append the <LF> ourselves.
+        // (An explicit escape is the only way to get a CR into the cooked value; those go through the escape path.)
+        // - "`a<CR>b`" and "`a<CR><LF>b`" both cook to `a\nb`, same as "`a<LF>b`"
+        // Note: `raw` is normalized separately, by the parser, from the source slice.
+        lastCanonizedInput += slice(lastOffset, pointer) + '\n';
+        lastCanonizedInputLen += (pointer - lastOffset) + 1;
         ASSERT_skip($$CR_0D);
         // crlf is considered one line for the sake of reporting line-numbers
         if (neof() && peeky($$LF_0A)) {
           ASSERT_skip($$LF_0A);
         }
+        lastOffset = pointer;
         incrementLine();
       } else if (isLfPsLs(c)) {
         ASSERT_skip(c);
@@ -1647,7 +1665,7 @@ function Lexer(
       // I think some heuristics could make this check easier to grok?
       // c !== $$SPACE_20 && c!== $$SEMI_3B &&
       (
-        isIdentStart(c, 0) !== INVALID_IDENT_CHAR || // IdentifierStart, `3in`, `5instanceof` `0x33in`
+        isIdentStart(c, pointer) !== INVALID_IDENT_CHAR || // IdentifierStart, `3in`, `5instanceof` `0x33in`
         (c >= $$0_30 && c <= $$9_39)                        // DecimalDigit, not even sure about an example
       )
     ) {
@@ -1681,8 +1699,10 @@ function Lexer(
     let c = peek();
 
     if (isAsciiNumber(c)) {
-      skip();
-      if (neof()) skipDigits(); // Do not allow underscores here
+      // A digit run after the leading zero is a LegacyOctalIntegerLiteral, unless it contains an `8` or a `9`. Then
+      // it is a NonOctalDecimalIntegerLiteral instead, which _is_ a DecimalIntegerLiteral (annexB B.1.1), so it can
+      // take a fraction and an exponent. Both forms are a syntax error in strict mode.
+      let nonOctal = skipDigitsCheckNonOctal(); // Do not allow underscores here
 
       if ((lexerFlags & LF_STRICT_MODE) === LF_STRICT_MODE) {
         if (!lastReportableLexerError) lastReportableLexerError = '"Illegal" octal escape in strict mode';
@@ -1691,6 +1711,17 @@ function Lexer(
 
       if (neof()) {
         let e = peek();
+
+        if (nonOctal) {
+          // Parse it like any other decimal. Note that the dot is consumed here, unlike for a legacy octal below.
+          // - `019.5` is `19.5` and `078e2` is `7800`
+          // - `08.foo` is an error because `08.` is already the whole literal (`017.foo` is a member expression)
+          // - `08n` is not a bigint; the `n` is left for verifyCharAfterNumber to reject
+          if (e === $$DOT_2E) parseFromFractionDot();
+          else parseExponentMaybe(e);
+          return $NUMBER_OLD;
+        }
+
         if (e === $$E_UC_45 || e === $$E_65) {
           if (!lastReportableLexerError) lastReportableLexerError = 'An exponent is not allowed after a legacy octal number and an ident after number must be separated by some whitespace so this is an error';
           return $ERROR;
@@ -1804,6 +1835,7 @@ function Lexer(
 
     if (canStartWithSeparator) {
       while (c === $$LODASH_5F) {
+        if (!supportNumericSeparator) return THROW('The numeric separator is supported in ES12+ / ES2021 (currently parsing ES' + targetEsVersion + ')', startForError, pointer + 1);
         ASSERT_skip($$LODASH_5F);
         if (eof()) return THROW('A numeric separator must be preceded and followed by a digit, EOF is not valid', startForError, pointer);
         c = peek();
@@ -1830,6 +1862,7 @@ function Lexer(
 
       // Every digit may be followed by one underscore, which must then be followed by at least one more digit.
       if (c === $$LODASH_5F) {
+        if (!supportNumericSeparator) return THROW('The numeric separator is supported in ES12+ / ES2021 (currently parsing ES' + targetEsVersion + ')', startForError, pointer + 1);
         ASSERT_skip($$LODASH_5F);
         if (eof()) return THROW('A numeric separator must be preceded and followed by a digit, EOF is not valid', startForError, pointer);
         c = peek();
@@ -1848,15 +1881,18 @@ function Lexer(
 
     return c;
   }
-  function skipDigits() {
-    // Does not parse underscores (!). Used for legacy octal, for example.
+  function skipDigitsCheckNonOctal() {
+    // Does not parse underscores (!). Used for legacy octal, which can not have numeric separators.
+    // Returns whether any digit was an `8` or a `9`, which makes it a NonOctalDecimalIntegerLiteral instead.
+    let nonOctal = false;
     let c = peek();
     while (isAsciiNumber(c)) {
+      if (c === $$8_38 || c === $$9_39) nonOctal = true;
       ASSERT_skip(c);
-      if (eof()) return 0; // monomorphism but meh. caller should check EOF state before using return value
+      if (eof()) break;
       c = peek();
     }
-    return c;
+    return nonOctal;
   }
   function parseExponentMaybe(c) {
     // this part is a little tricky. if an `e` follows, an optional +- may follow but at least one digit must follow regardless
@@ -1938,6 +1974,7 @@ function Lexer(
       c = peek();
 
       if (c === $$LODASH_5F) {
+        if (!supportNumericSeparator) return THROW('The numeric separator is supported in ES12+ / ES2021 (currently parsing ES' + targetEsVersion + ')', startForError, pointer + 1);
         ASSERT_skip($$LODASH_5F);
         if (eof()) {
           return THROW('A numeric separator must be preceded and followed by a digit, EOF is not valid', startForError, pointer);
@@ -1990,6 +2027,7 @@ function Lexer(
       c = peek();
 
       if (c === $$LODASH_5F) {
+        if (!supportNumericSeparator) return THROW('The numeric separator is supported in ES12+ / ES2021 (currently parsing ES' + targetEsVersion + ')', startForError, pointer + 1);
         ASSERT_skip($$LODASH_5F);
         if (eof()) {
           return THROW('A numeric separator must be preceded and followed by a digit, EOF is not valid', startForError, pointer);
@@ -2036,6 +2074,7 @@ function Lexer(
       c = peek();
 
       if (c === $$LODASH_5F) {
+        if (!supportNumericSeparator) return THROW('The numeric separator is supported in ES12+ / ES2021 (currently parsing ES' + targetEsVersion + ')', startForError, pointer + 1);
         ASSERT_skip($$LODASH_5F);
         if (eof()) {
           return THROW('A numeric separator must be preceded and followed by a digit, EOF is not valid', startForError, pointer);
@@ -2564,7 +2603,9 @@ function Lexer(
   }
 
   function parseLt() {
-    if (parsingGoal === GOAL_SCRIPT && webCompat === WEB_COMPAT_ON && !eofd(3) && peek() === $$EXCL_21 && peekd(1) === $$DASH_2D && peekd(2) === $$DASH_2D) {
+    // peekd(2) reads pointer+2, so guard with neofd(3). The comment chars are optional (`SingleLineHTMLOpenComment ::
+    // <!-- SingleLineCommentChars_opt`) so a `<!--` that runs straight into EOF is still a complete comment.
+    if (parsingGoal === GOAL_SCRIPT && webCompat === WEB_COMPAT_ON && neofd(3) && peek() === $$EXCL_21 && peekd(1) === $$DASH_2D && peekd(2) === $$DASH_2D) {
       return parseCommentHtmlOpen();
     }
     return parseLtPunctuator(); // < << <= <<=
@@ -2784,8 +2825,10 @@ function Lexer(
   let regexBodyOpCharsInvalidSansUV = false; // the non-v non-u reading of chars consumed as v operators / \q strings is invalid (`/[a--b]/` is the out-of-order range a-to-dash without flags) — the v flag itself is exempt
   let regexBodyOpCharsInvalidWithU = false; // the u reading of chars consumed as v operators / \q strings is invalid (`/[a--b]/u`) — the v flag itself is exempt
   let regexBodyHasPropOfStrings = false; // \p{RGI_Emoji} etc are only valid with v flag; error after flags if u flag
-  let regexBodyHasNegatedPropOfStrings = false; // \P{RGI_Emoji} or [^\p{RGI_Emoji}] etc is always an error (can't negate property of strings)
+  let regexBodyHasNegatedPropOfStrings = false; // \P{RGI_Emoji} etc is always an error (can't negate property of strings)
+  let regexLastEscapeWasPropOfStrings = false; // the class escape just parsed was a \p{...} property of strings, which MayContainStrings
   let regexCurrentCharClassIsNegated = false; // set to true while parsing inside [^...], so \p{...} can detect it
+  let nonVInClass = true; // whether the reading *without* the v flag is still inside the char class (an unescaped `[` only opens a nested class with the v flag, so after the first unescaped `]` the rest is pattern body there)
   let regexBranchPath = [0]; // ES2025: disjunction branch index at each nesting level (for MightBothParticipate duplicate named group check)
   let declaredGroupNamesWithPath = new Map(); // ES2025: name -> array of { path, pointerStart, pointerEnd } (only when supportRegexDuplicateNamedCaptureGroups)
   function parseRegex(c) {
@@ -2805,6 +2848,7 @@ function Lexer(
     regexBodyOpCharsInvalidWithU = false;
     regexBodyHasPropOfStrings = false;
     regexBodyHasNegatedPropOfStrings = false;
+    regexLastEscapeWasPropOfStrings = false;
     regexBranchPath = [0];
     declaredGroupNamesWithPath = new Map();
 
@@ -2881,7 +2925,7 @@ function Lexer(
 
     if (regexBodyOpCharsInvalidWithU && ustatusFlags === REGEX_GOOD_WITH_U_FLAG) {
       // - `/[a--b]/u` (with the u flag the chars consumed as v operators read as the out-of-order range a-to-dash)
-      regexSyntaxError('With the u flag the characters of a `--` / `&&` / `\\q{...}` construct are plain class atoms, and that reading of this class is invalid (for example an out-of-order range or a class escape range)');
+      regexSyntaxError('With the u flag this character class is invalid (an out-of-order range, a class escape range, or an identity escape that is not a SyntaxCharacter or `/`)');
       return $ERROR;
     }
 
@@ -3827,11 +3871,9 @@ function Lexer(
         // forward slash (/)
         // syntax chars (^, $, \, ., *, +, ?, (, ), [, ], {, }, |)
         // and any ascii char that doesn't fit other cases
-        // With v flag, \v is invalid (identity escape of the flag character is not allowed).
-        if (c === $$V_76) {
-          regexBodyHasSyntaxInvalidWithVFlag = true;
-          lastPotentialRegexErrorForVFlag = 'Identity escape of `v` is not allowed with the v flag';
-        }
+        // Note: `\v` is a ControlEscape, not an IdentityEscape, so the v-mode identity escape restriction does not
+        // apply to it. Every char in this bucket is a SyntaxCharacter, `/`, a ControlEscape, or a class escape, so
+        // they are all valid with the u-flag and the v-flag alike.
         ASSERT_skip(c);
         return REGEX_ALWAYS_GOOD;
 
@@ -3978,8 +4020,7 @@ function Lexer(
         // - `/\P{name}`
         // - `/\p{name=value}`
         // - `/\P{name=value}`
-        const FROM_ATOM = false;
-        return parseRegexPropertyEscape(c, FROM_ATOM);
+        return parseRegexPropertyEscape(c);
 
       case REGATOM_ESC_0:
         ASSERT_skip($$0_30);
@@ -4069,23 +4110,21 @@ function Lexer(
     ASSERT_skip(c);
 
     if (eof()) return regexSyntaxError('Early EOF while parsing decimal escape in regex');
-    let d = peek();
-    if (d >= $$0_30 && d <= $$9_39) {
+
+    // The production takes any number of digits, so consume them all. Whether the resulting index actually has a
+    // capturing group is checked once the whole body is parsed (and without u/v annexB then reads it as a legacy
+    // octal escape instead), so all this has to do is track the largest index seen.
+    // - `/()()...()\100/u` with a hundred groups is a backreference to the last one
+    let n = c - $$0_30;
+    while (neof()) {
+      let d = peek();
+      if (d < $$0_30 || d > $$9_39) break;
       ASSERT_skip(d);
-      let e = peek();
-      if (e >= $$0_30 && e <= $$9_39) {
-        let reason = 'Parsed too many digits';
-        if (webCompat === WEB_COMPAT_ON) {
-          return updateRegexUflagIsIllegal(REGEX_ALWAYS_GOOD, reason);
-        } else {
-          return regexSyntaxError(reason);
-        }
-      } else {
-        largestBackReference = Math.max(largestBackReference, ((c - $$0_30) * 10) + (d - $$0_30)); // TODO: test the case where largestBackReference was not properly maxed
-      }
-    } else {
-      largestBackReference = Math.max(largestBackReference, c - $$0_30)
+      // An index can never exceed the input length, so stop growing there. This keeps the number small (and exact
+      // for any index that could still match a group) no matter how many digits follow.
+      if (n <= len) n = (n * 10) + (d - $$0_30);
     }
+    largestBackReference = Math.max(largestBackReference, n);
 
     return REGEX_ALWAYS_GOOD;
   }
@@ -4121,22 +4160,25 @@ function Lexer(
     // reading while the v reading keeps us in the class through nested brackets, because an unescaped `/` outside
     // the non-v class must end the regex literal.
     // - `x=/[-[\]a]/g;` (the nested `[` keeps the v reading open past the `]` that closes the class without v)
-    let nonVInClass = true;
+    nonVInClass = true;
     // While consuming chars that are body content in the non-v reading, track what the body grammar allows next:
     // 2 = after an atom (a quantifier may follow), 1 = after a quantifier (only a lazy `?` may follow),
     // 0 = after an assertion/lazy marker (no quantifier may follow), 3/4 = inside a bounded quantifier `{...}`
-    // (3 = no digit seen yet, 4 = digit seen so `}` may close it).
+    // (3 = no digit seen yet, 4 = digit seen so `}` may close it), 9 = after a lookahead, which is a quantifiable
+    // atom only through the annexB `QuantifiableAssertion` (so quantifying it needs webcompat and rejects the u flag).
     // - `/[[a]+]/` `/[[a]+?]/` `/[[a]{2,3}]/` (valid body syntax) vs `/[[a]+*]/` `/[[a]?*]/` (nothing to repeat)
+    // - `/[[](?=)+/` is valid, `/[[](?=)+/u` is not, and `/[[](?<=)+/` is not either (lookbehind is state 0)
     let nonVRegionState = 2;
     // Parens in the ambiguous region open real groups in the non-v body reading; track balance so an unterminated
-    // group rejects (`/[[a](]/` is invalid in every reading). Note: these groups do not add to nCapturingParens,
-    // which can misvalidate backreferences that follow such rare regexes in pure (non-webcompat) mode.
+    // group rejects (`/[[a](]/` is invalid in every reading). They are real captures in that reading, so they are
+    // counted into nCapturingParens (assume capturing at the `(`, take it back once a non-capturing head shows up).
     let regionParenDepth = 0;
     // Region-local duplicate named-group detection (MightBothParticipate, ES2025 22.2.1.1). Named groups in the
     // ambiguous body tail are real captures; two with the same name in the same disjunction alternative are an
     // error. Track a branch path (branch index per group-nesting depth, bumped by `|`) and each declared name.
     // - `/[[a](?<n>y)(?<n>y)]/` invalid (same alternative) vs `/[[a](?<n>y)|(?<n>y)]/` valid (different alternatives)
     let regionBranch = [0];
+    let regionGroupKind = []; // per open `(` in the region: 0=ordinary, 1=lookahead, 2=lookbehind
     let regionGroupNames = new Map(); // name -> array of branch-path snapshots
     let regionCurName = '';
     // In the v reading a nested `[` starts a fresh class, so a dash or set operator right after it has no lhs
@@ -4451,7 +4493,12 @@ function Lexer(
           }
           else if (nonVRegionState === 7) {
             // First char after `(?<`: `=`/`!` start a lookbehind body; anything else starts a group name
-            if (c === $$IS_3D || c === $$EXCL_21) nonVRegionState = 0;
+            if (c === $$IS_3D || c === $$EXCL_21) {
+              // A lookbehind is not a `QuantifiableAssertion`, so it may never take a quantifier
+              if (regionGroupKind.length > 0) regionGroupKind[regionGroupKind.length - 1] = 2;
+              --nCapturingParens; // a lookbehind does not capture (a `(?<name>` head does, so only these two)
+              nonVRegionState = 0;
+            }
             else { nonVRegionState = 8; regionCurName = String.fromCharCode(c); }
           }
           else if (nonVRegionState === 8) {
@@ -4475,7 +4522,12 @@ function Lexer(
           }
           else if (nonVRegionState === 6) {
             // Right after `(?`: qualifier of a special group
-            if (c === $$COLON_3A || c === $$IS_3D || c === $$EXCL_21) nonVRegionState = 0;
+            if (c === $$COLON_3A || c === $$IS_3D || c === $$EXCL_21) {
+              // `(?=` and `(?!` are assertions; annexB `QuantifiableAssertion` lets them take a quantifier
+              if (c !== $$COLON_3A && regionGroupKind.length > 0) regionGroupKind[regionGroupKind.length - 1] = 1;
+              --nCapturingParens; // `(?:`, `(?=` and `(?!` do not capture
+              nonVRegionState = 0;
+            }
             else if (c === $$LT_3C) nonVRegionState = 7;
             else { regexBodyUsedVOnlySyntax = true; nonVRegionState = 0; } // `(?x` is not a valid group head
           }
@@ -4494,7 +4546,19 @@ function Lexer(
               || esc === $$W_77 || esc === $$W_UC_57 || esc === $$B_62 || esc === $$B_UC_42
               || esc === $$F_66 || esc === $$N_6E || esc === $$R_72 || esc === $$T_74 || esc === $$V_76
               || esc === $$X_78 || esc === $$U_75 || esc === $$C_63;
-            if ((isLetter && !isStrictLetter) || (esc >= $$1_31 && esc <= $$9_39)) regexBodyNestedClassTailRbracket = true;
+            if (isLetter && !isStrictLetter) regexBodyNestedClassTailRbracket = true;
+            else if (esc >= $$1_31 && esc <= $$9_39) {
+              // A backreference in the body reading. Record the index and let the regular check adjudicate it once
+              // the group count is known; too large an index falls back to a legacy octal escape, which is annexB
+              // only. - `/[[](a)\1/u` is a backreference to the group, `/[[]\1/u` has no group to reference
+              let n = 0;
+              for (let k = 1; neofd(k + 1); ++k) {
+                const d = peekd(k);
+                if (d < $$0_30 || d > $$9_39) break;
+                n = (n * 10) + (d - $$0_30);
+              }
+              largestBackReference = Math.max(largestBackReference, n);
+            }
             else if (!isLetter && esc !== $$0_30) {
               // Escaped punctuation: valid strict body escape ([~U] IdentityEscape excludes only UnicodeIDContinue)
               // but with the u flag only SyntaxCharacters and `/` may be identity-escaped in the body (`/[[]\-/u`)
@@ -4509,11 +4573,30 @@ function Lexer(
           else if (c === $$PAREN_L_28) {
             regionParenDepth++;
             regionBranch.push(0); // enter a new group-nesting level for the branch path
+            regionGroupKind.push(0);
+            ++nCapturingParens; // assume capturing; a `(?:`/`(?=`/`(?!`/`(?<=`/`(?<!` head takes it back below
             nonVRegionState = 5; // group opened; quantifiers may not start a group body
           }
           else if (c === $$PAREN_R_29) {
-            if (regionParenDepth > 0) { regionParenDepth--; if (regionBranch.length > 1) regionBranch.pop(); nonVRegionState = 2; } // a group is a quantifiable atom
-            else { regexBodyUsedVOnlySyntax = true; nonVRegionState = 0; } // stray `)` is invalid in the body too
+            if (regionParenDepth > 0) {
+              regionParenDepth--;
+              if (regionBranch.length > 1) regionBranch.pop();
+              // An ordinary group is a quantifiable atom, a lookahead is one only under annexB (state 9), and a
+              // lookbehind is not one at all. - `/[[](?=)+/` is valid, `/[[](?=)+/u` and `/[[](?<=)+/` are not
+              const kind = regionGroupKind.pop();
+              nonVRegionState = kind === 2 ? 0 : kind === 1 ? 9 : 2;
+            }
+            else {
+              // This `)` does not match a group opened inside the region, so in the non-v body reading it closes a
+              // group opened in the enclosing regex body (the class already closed at an earlier `]`). The class
+              // parser can not track that group, so return control to `_parseRegexBody` with the pointer left on the
+              // `)`; it closes the enclosing group there (or rejects a genuinely unmatched `)`). The v reading has
+              // the class still open here (an unescaped `)` inside it), so that reading is invalid — mirror the `/`
+              // exit above. - `/([()\][%!^"`<>&|;, *?])/g` (the nested `[...]` keeps the v class open past the `)`)
+              regexBodyHasSyntaxInvalidWithVFlag = true;
+              lastPotentialRegexErrorForVFlag = 'With the v flag the character class would still be open at the `)` (which would also have to be escaped inside a class), so this regex is only valid without the v flag';
+              return flagState; // pointer is at the `)`; the caller parses it as the close of the enclosing group
+            }
           }
           else if (c === $$CURLY_R_7D) {
             // A stray `}` is a valid annex B body literal (ExtendedPatternCharacter allows it)
@@ -4522,18 +4605,27 @@ function Lexer(
           }
           else if (c === $$CURLY_L_7B) {
             // - `x=/[[a]{2}]/g;` (bounded quantifier after the class atom is valid body syntax)
-            if (nonVRegionState === 2) nonVRegionState = 3;
+            if (nonVRegionState === 2 || nonVRegionState === 9) {
+              if (nonVRegionState === 9) regexBodyNestedClassTailRbracket = true; // quantified lookahead: annexB only
+              nonVRegionState = 3;
+            }
             else { regexBodyUsedVOnlySyntax = true; nonVRegionState = 0; }
           }
           else if (c === $$STAR_2A || c === $$PLUS_2B) {
             // - `x=/[[a]+]/g;` (one quantifier after the class atom is valid body syntax)
             // - `x=/[[a]+*]/g;` (a second quantifier is invalid in the body, and `+*` is also invalid with the v flag)
-            if (nonVRegionState === 2) nonVRegionState = 1;
+            if (nonVRegionState === 2 || nonVRegionState === 9) {
+              if (nonVRegionState === 9) regexBodyNestedClassTailRbracket = true; // quantified lookahead: annexB only
+              nonVRegionState = 1;
+            }
             else { regexBodyUsedVOnlySyntax = true; nonVRegionState = 0; }
           }
           else if (c === $$QMARK_3F) {
             // `?` is a quantifier after an atom, or the lazy marker right after another quantifier (`+?`, `{2}?`)
-            if (nonVRegionState === 2) nonVRegionState = 1;
+            if (nonVRegionState === 2 || nonVRegionState === 9) {
+              if (nonVRegionState === 9) regexBodyNestedClassTailRbracket = true; // quantified lookahead: annexB only
+              nonVRegionState = 1;
+            }
             else if (nonVRegionState === 1) nonVRegionState = 0;
             else { regexBodyUsedVOnlySyntax = true; nonVRegionState = 0; }
           }
@@ -4676,17 +4768,67 @@ function Lexer(
           let qAltCodePoints = 0;
           let qMayStr = false;
           let qPrevHigh = false; // previous consumed unit was a high surrogate (so a low surrogate merges into it)
+          let qUnterminated = false; // the `\q{` never closed, so only the non-v reading can still be valid
           while (c !== $$CURLY_R_7D) {
+            if (c === $$SQUARE_R_5D || c === $$FWDSLASH_2F) {
+              // The ClassString is not terminated. That is fatal with the v flag, but without it this was never a
+              // ClassString to begin with, so do not consume the `]` (which closes the class) or the `/` (which
+              // ends the regex); leave it to the outer loop, which reads them in the non-v sense.
+              // - `/[\q{a]/` is the class `q { a` in webcompat, while `/[\q{a]/v` is an error
+              regexBodyHasSyntaxInvalidWithVFlag = true;
+              lastPotentialRegexErrorForVFlag = 'Unterminated `\\q{...}` in character class with the v flag';
+              qUnterminated = true;
+              break;
+            }
             if (c === $$CR_0D || c === $$LF_0A || c === $$PS_2028 || c === $$LS_2029) {
               return regexSyntaxError('Encountered newline inside \\q{...} in character class');
             }
             if (c === $$BACKSLASH_5C) {
               ASSERT_skip($$BACKSLASH_5C);
               if (eof()) return regexSyntaxError('Unexpected early EOF after backslash in \\q{...}');
-              ASSERT_skip(peek());
+              // Consume the whole escape, not just its first char: a CharacterEscape is one ClassSetCharacter no
+              // matter how many chars spell it, so the rest must not be counted as extra code points, and the `}`
+              // of a `\u{...}` must not be mistaken for the end of the `\q{...}`.
+              // - `/[^\q{A}]/v` and `/[^\q{\u{1F600}}]/v` are one code point, so they contain no strings
+              // Only `\b`, a CharacterEscape, or an escaped ClassSetReservedPunctuator is a ClassSetCharacter, so
+              // a class escape, a decimal escape, a `\k`, a nested `\q` and any malformed escape are invalid. They
+              // are ordinary atoms in the reading without the v flag, so only poison that reading.
+              // - `/[\q{\d}]/v` is an error while `/[\q{\d}]/` is `q { \d }` in webcompat
+              let e = peek();
+              ASSERT_skip(e);
+              let cu = -1; // code unit of a `\uXXXX`, so that a `\uXXXX\uXXXX` pair still counts as one code point
+              let badEscape = false;
+              if (e === $$X_78) badEscape = skipHexDigitsForQString(2) < 0;
+              else if (e === $$0_30) badEscape = neof() && isAsciiNumber(peek()); // `0 [lookahead not DecimalDigit]`
+              else if (e === $$C_63) { if (neof() && isAsciiLetter(peek())) skip(); else badEscape = true; }
+              else if (e === $$U_75) {
+                if (neof() && peeky($$CURLY_L_7B)) {
+                  ASSERT_skip($$CURLY_L_7B);
+                  let cp = -1;
+                  while (neof()) {
+                    let h = getHexValue(peek());
+                    if (h === HEX_OOB) break;
+                    skip();
+                    cp = (cp < 0 ? 0 : cp) * 16 + h;
+                    if (cp > 0x10FFFF) badEscape = true; // keep the value bounded while still consuming the digits
+                  }
+                  if (cp < 0) badEscape = true; // at least one hex digit is required
+                  if (neof() && peeky($$CURLY_R_7D)) ASSERT_skip($$CURLY_R_7D);
+                  else badEscape = true;
+                } else {
+                  cu = skipHexDigitsForQString(4);
+                  badEscape = cu < 0;
+                }
+              }
+              else badEscape = !isClassStringSingleCharEscape(e);
+              if (badEscape) {
+                regexBodyHasSyntaxInvalidWithVFlag = true;
+                lastPotentialRegexErrorForVFlag = 'Only `\\b`, a CharacterEscape, or an escaped ClassSetReservedPunctuator is a valid escape inside `\\q{...}` with the v flag';
+              }
               // Approximate the non-v reading of the escaped char as a plain atom (no range participation)
               if (nonVInClass) { urangeOpen = false; nrangeOpen = false; urangeLeft = -1; nrangeLeft = -1; }
-              qAltCodePoints++; qPrevHigh = false; // an escape is one code point (\uXXXX\uYYYY pairs are rare; approximate)
+              if (!(qPrevHigh && cu >= 0xDC00 && cu <= 0xDFFF)) qAltCodePoints++;
+              qPrevHigh = cu >= 0xD800 && cu <= 0xDBFF;
             } else if (c === $$OR_7C) {
               // Alternative separator: finalize the alternative just scanned
               if (qAltCodePoints !== 1) qMayStr = true;
@@ -4709,6 +4851,7 @@ function Lexer(
             if (eof()) return regexSyntaxError('Unexpected early EOF while parsing \\q{...} in character class');
             c = peek();
           }
+          if (qUnterminated) continue; // `c` is the unconsumed `]` or `/`; the outer loop deals with it
           if (qAltCodePoints !== 1) qMayStr = true; // finalize the last alternative
           ASSERT_skip($$CURLY_R_7D);
           if (nonVInClass) nonVAtomAccounting($$CURLY_R_7D);
@@ -4757,24 +4900,12 @@ function Lexer(
         let escapePointer = pointer;
 
         // `c` may be >0xffff by unicode ruby escape or double unicode quad escapes (only...)
+        // Note: RegularExpressionNonTerminator excludes a LineTerminator from the _source_, so only a literal U+2028
+        // or U+2029 is illegal (checked above and in the escape parser). An escape that happens to _denote_ one is
+        // spelled with ASCII characters and is an ordinary ClassAtom.
+        // - `/[\u2028]/` is fine, `/[<LS>]/` is not
+        regexLastEscapeWasPropOfStrings = false;
         c = parseRegexCharClassEscape(c);
-
-        // RegularExpressionNonTerminator: pattern must not contain U+2028 or U+2029 (line terminators).
-        // This check applies to all escape sequences (including \u, \x, etc.) regardless of flags (u/v).
-        // https://tc39.es/ecma262/#prod-RegularExpressionNonTerminator
-        if (c !== REGEX_CHARCLASS_BAD && c !== REGEX_CHARCLASS_CLASS_ESCAPE && c !== REGEX_CHARCLASS_ESCAPED_UC_B && c !== REGEX_CHARCLASS_ESCAPED_C) {
-          let codePoint = c;
-          // Remove any flags to get the actual code point
-          if (codePoint & REGEX_CHARCLASS_WAS_RUBY) codePoint ^= REGEX_CHARCLASS_WAS_RUBY;
-          if (codePoint & REGEX_CHARCLASS_BAD_WITH_U_FLAG) codePoint ^= REGEX_CHARCLASS_BAD_WITH_U_FLAG;
-          if (codePoint & REGEX_CHARCLASS_BAD_WITH_V_FLAG) codePoint ^= REGEX_CHARCLASS_BAD_WITH_V_FLAG;
-          if (codePoint & REGEX_CHARCLASS_BAD_SANS_U_FLAG) codePoint ^= REGEX_CHARCLASS_BAD_SANS_U_FLAG;
-
-          if (codePoint === $$PS_2028 || codePoint === $$LS_2029) {
-            regexSyntaxError('Regular expressions do not support line continuations (escaped x2028 x2029)');
-            return REGEX_CHARCLASS_BAD;
-          }
-        }
 
         // TODO: /[\u{01}-a]/ if there is a u-flag, this is ok. no u-flag, `}-a` should fail unless webcompat mode
         // in both cases, at this point, it should not yet fail. strict mode is not relevant.
@@ -4878,7 +5009,13 @@ function Lexer(
           // [x]: `/[\B-A]/`
           // [w]: `/[\B-Z]/`
 
-          if (webCompat === WEB_COMPAT_ON) {
+          if (!nonVInClass) {
+            // The class already closed at an earlier `]` in the readings without the v flag, so this `\B` is an
+            // ordinary body assertion there; only the v reading still has it inside a class.
+            // - `/[[]\B/u` is fine, `/[[]\B/v` is not
+            regexBodyHasSyntaxInvalidWithVFlag = true;
+            if (!lastPotentialRegexErrorForVFlag) lastPotentialRegexErrorForVFlag = 'Char class can not contain `\\B`';
+          } else if (webCompat === WEB_COMPAT_ON) {
             flagState = updateRegexUflagIsIllegal(REGEX_ALWAYS_GOOD, 'Char class can not contain `\\B`');
           } else {
             flagState = regexSyntaxError('Char class can not contain `\\B`');
@@ -5139,7 +5276,9 @@ function Lexer(
           } else if (!(isSurrogate && !wasEscape)) {
             // a literal surrogate tail merged into the head that was already counted; anything else is an operand
             vOperandEvent();
-            vOperandStr(false); // a single ClassSetCharacter or class escape never contributes strings
+            // A single ClassSetCharacter or class escape contributes no strings, except a property of strings.
+            vOperandStr(regexLastEscapeWasPropOfStrings);
+            regexLastEscapeWasPropOfStrings = false;
             // Only a single ClassSetCharacter can start a range; class escapes (\d etc, marked with the special
             // REGEX_CHARCLASS_* sentinel values) can not.
             vPrevOperandRangeable = c !== REGEX_CHARCLASS_CLASS_ESCAPE;
@@ -5255,6 +5394,52 @@ function Lexer(
     return ((codepoint - 0x10000) >> 10) + 0xD800
   }
 
+  function isClassSetReservedPunctuator(c) {
+    ASSERT(isClassSetReservedPunctuator.length === arguments.length, 'arg count');
+    // https://tc39.es/ecma262/#prod-ClassSetReservedPunctuator
+    // Note: `-` is part of this production too but never reaches the callers (it is handled as a range dash first).
+    switch (c) {
+      case $$AND_26: case $$EXCL_21: case $$HASH_23: case $$PERCENT_25: case $$COMMA_2C: case $$COLON_3A:
+      case $$SEMI_3B: case $$LT_3C: case $$IS_3D: case $$GT_3E: case $$AT_40: case $$TICK_60: case $$TILDE_7E:
+        return true;
+    }
+    return false;
+  }
+
+  function isClassStringSingleCharEscape(c) {
+    ASSERT(isClassStringSingleCharEscape.length === arguments.length, 'arg count');
+    // The single character escapes that `ClassSetCharacter` allows after a backslash inside a `\q{...}`.
+    // The ones that take trailing characters (`\0`, `\c`, `\x`, `\u`) are handled by the caller.
+    // https://tc39.es/ecma262/#prod-ClassSetCharacter
+    switch (c) {
+      // `\b`, and ControlEscape
+      case $$B_62: case $$F_66: case $$N_6E: case $$R_72: case $$T_74: case $$V_76:
+      // IdentityEscape with u-mode: SyntaxCharacter and `/`
+      case $$XOR_5E: case $$$_24: case $$BACKSLASH_5C: case $$DOT_2E: case $$STAR_2A: case $$PLUS_2B:
+      case $$QMARK_3F: case $$PAREN_L_28: case $$PAREN_R_29: case $$SQUARE_L_5B: case $$SQUARE_R_5D:
+      case $$CURLY_L_7B: case $$CURLY_R_7D: case $$OR_7C: case $$FWDSLASH_2F:
+        return true;
+    }
+    // and `\` ClassSetReservedPunctuator (the `-` of which _can_ reach this one, unlike in a char class)
+    return c === $$DASH_2D || isClassSetReservedPunctuator(c);
+  }
+
+  function skipHexDigitsForQString(n) {
+    ASSERT(skipHexDigitsForQString.length === arguments.length, 'arg count');
+    // Skips up to n hex digits of an escape inside a `\q{...}` and returns their value, or -1 when there were
+    // fewer than n (a malformed escape, which is rejected elsewhere; here we only need to consume its spelling).
+    let v = 0;
+    for (let i = 0; i < n; ++i) {
+      if (eof()) return -1;
+      let c = peek();
+      let h = getHexValue(c);
+      if (h === HEX_OOB) return -1;
+      ASSERT_skip(c);
+      v = (v << 4) | h;
+    }
+    return v;
+  }
+
   function parseRegexCharClassEscape(c) {
     ASSERT(parseRegexCharClassEscape.length === arguments.length, 'arg count');
 
@@ -5275,7 +5460,15 @@ function Lexer(
         // Defer error until flags are parsed (no peeking): propagate REGEX_CHARCLASS_BAD_WITH_V_FLAG.
         // With u-flag only / and syntax chars may be identity-escaped; so every other char (e.g. \j, \') is invalid with u too.
         ASSERT_skip(c);
-        if (supportRegexVFlag && c === $$AND_26) return c;
+        // `ClassSetCharacter :: \ ClassSetReservedPunctuator` makes these valid with the v flag, and they are not
+        // UnicodeIDContinue so `IdentityEscape[~U]` makes them valid without flags too. But with the u flag only a
+        // SyntaxCharacter or `/` may be identity-escaped, so the u reading is invalid (the v flag is exempt).
+        // (`\-` never reaches this branch; it is also valid with u through `ClassEscape[+U] :: -`.)
+        // - `/[\!]/v` and `/[\!]/` are fine, `/[\!]/u` is not
+        if (supportRegexVFlag && isClassSetReservedPunctuator(c)) {
+          regexBodyOpCharsInvalidWithU = true;
+          return c;
+        }
 
         ASSERT(![$$BACKSLASH_5C, $$K_6B, $$C_63, $$XOR_5E, $$$_24, $$DOT_2E, $$STAR_2A, $$PLUS_2B, $$QMARK_3F, $$PAREN_L_28, $$PAREN_R_29, $$SQUARE_L_5B, $$SQUARE_R_5D, $$CURLY_L_7B, $$CURLY_R_7D, $$OR_7C].includes(c), 'all these u-flag chars should be checked above');
         if (webCompat === WEB_COMPAT_ON) {
@@ -5445,17 +5638,7 @@ function Lexer(
         }
         ASSERT_skip(b);
 
-        let result = (va << 4) | vb;
-
-        // RegularExpressionNonTerminator: pattern must not contain U+2028 or U+2029 (line terminators).
-        // This check applies regardless of flags (u/v).
-        // https://tc39.es/ecma262/#prod-RegularExpressionNonTerminator
-        if (result === $$PS_2028 || result === $$LS_2029) {
-          regexSyntaxError('Regular expressions do not support line continuations (escaped x2028 x2029)');
-          return REGEX_CHARCLASS_BAD;
-        }
-
-        return result;
+        return (va << 4) | vb;
 
       case REGCLS_ESC_c: {
         // char escapes \c<?>
@@ -5575,8 +5758,7 @@ function Lexer(
         // With uflag, the \p is a unicode property escape and must look like \p{x} or \p{x=y} with x and y whitelisted
         // Without uflag, the \p it leads to IdentityEscape where it fails for any value that is in ID_CONTINUE, inc p
         // In webcompat mode, without uflag, it leads to SourceCharacterIdentityEscape and passes without "body"
-        const FROM_CHARCLASS = true;
-        let regexPropState = parseRegexPropertyEscape(c, FROM_CHARCLASS);
+        let regexPropState = parseRegexPropertyEscape(c);
 
         if (regexPropState === REGEX_ALWAYS_BAD) {
           ASSERT(lastPotentialRegexError, 'should be set');
@@ -5647,6 +5829,13 @@ function Lexer(
         let reason = 'A character class is not allowed to have numeric back-reference';
 
         // Without web compat this is a back reference which is illegal in character classes
+        if (!nonVInClass) {
+          // As with `\B` above: in the readings without the v flag the class already closed, so this is an
+          // ordinary body backreference there. - `/[[](a)\1/u` is fine, `/[[](a)\1/v` is not
+          regexBodyHasSyntaxInvalidWithVFlag = true;
+          if (!lastPotentialRegexErrorForVFlag) lastPotentialRegexErrorForVFlag = reason;
+          return REGEX_CHARCLASS_CLASS_ESCAPE;
+        }
         if (webCompat === WEB_COMPAT_ON) {
           updateRegexUflagIsIllegal(REGEX_ALWAYS_GOOD, reason);
           if (supportRegexVFlag) {
@@ -5693,7 +5882,7 @@ function Lexer(
 
     ASSERT(false, 'unreachable');
   }
-  function parseRegexPropertyEscape(c, fromCharClass) {
+  function parseRegexPropertyEscape(c) {
     ASSERT(parseRegexPropertyEscape.length === arguments.length, 'arg count');
     ASSERT(c === $$P_70 || c === $$P_UC_50, 'this should be \\p or \\P', c);
     ASSERT(peek() === c, 'not yet consumed');
@@ -5907,10 +6096,17 @@ function Lexer(
     // \P{...} (negated) is always an error for properties of strings.
     // Defer the u/v check until flags are known.
     if (TABLE_PROPS_OF_STRINGS.includes(nc)) {
-      if (isNegated || (fromCharClass && regexCurrentCharClassIsNegated)) regexBodyHasNegatedPropOfStrings = true;
-      else regexBodyHasPropOfStrings = true;
+      if (isNegated) regexBodyHasNegatedPropOfStrings = true;
+      else {
+        regexBodyHasPropOfStrings = true;
+        // A property of strings MayContainStrings, so it may not appear in a negated class at _any_ depth. Report it
+        // to the char class parser, which tracks the negation of every nesting level (`/[[^\p{RGI_Emoji}]]/v`).
+        regexLastEscapeWasPropOfStrings = true;
+      }
       ASSERT_skip($$CURLY_R_7D);
-      return REGEX_ALWAYS_GOOD;
+      // Like any other `\p`, this is only legal with u-flag or v-flag, or as the annexB identity escape of `p`
+      if (webCompat === WEB_COMPAT_ON) return REGEX_ALWAYS_GOOD;
+      return updateRegexUflagIsMandatory(REGEX_ALWAYS_GOOD, 'The `\\p` property escape is only legal with a u-flag or v-flag, or as a webcompat edge case');
     }
 
     // Validate value against non-binary unicode properties or general category values

@@ -43,7 +43,7 @@ ast: {
             type: 'TemplateElement',
             loc:{start:{line:1,column:1},end:{line:2,column:0},source:''},
             tail: true,
-            value: { raw: '\n', cooked: '\r' }
+            value: { raw: '\n', cooked: '\n' }
           }
         ]
       }

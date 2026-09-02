@@ -6,7 +6,7 @@
 >
 > ::> scope var escapes to function
 >
-> Var in static block is in enclosing function scope; return x is valid.
+> A var in a static block does not escape to the enclosing function; `return x` is still valid because an unresolved reference is not an early error.
 >
 ## PASS
 

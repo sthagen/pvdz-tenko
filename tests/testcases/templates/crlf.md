@@ -58,7 +58,7 @@ ast: {
               type: 'TemplateElement',
               loc:{start:{line:2,column:1},end:{line:3,column:3},source:''},
               tail: true,
-              value: { raw: 'foo\nbar', cooked: 'foo\r\nbar' }
+              value: { raw: 'foo\nbar', cooked: 'foo\nbar' }
             }
           ]
         }

@@ -30,12 +30,12 @@ Parsed with script goal and as if the code did not start with strict mode header
 
 `````
 throws: Lexer error!
-    Regex: Regex used v-mode character class syntax (e.g. set difference `--` or nested sets) but did not have the v flag
+    Regex: Found unescaped closing paren `)` without a group being open
 
 start@1:0, error@1:2
 ╔══╦════════════════
  1 ║ x=/[[a])]/g;
-   ║   ^^^^^^^^^------- error
+   ║   ^^^^^^------- error
 ╚══╩════════════════
 
 `````

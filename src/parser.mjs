@@ -134,7 +134,7 @@ import {
   LF_NOT_KEYWORD,
   LF_CHAINING,
   LF_NOT_IN_FUNC,
-  LF_IN_CLASS_FIELD_INIT,
+  LF_NO_ARGUMENTS,
   LF_IN_STATIC_BLOCK,
 
   L,
@@ -715,6 +715,17 @@ function Parser(code, options = {}) {
   // operators (`??=`, `&&=`, `||=`) per its note, and web-compat is not `simple` so destructuring targets still reject.
   // https://tc39.es/ecma262/#sec-runtime-errors-for-function-call-assignment-targets
   let allowCallAssignmentTarget = options_webCompat === WEB_COMPAT_ON;
+  // Set by the value parsers that produce something which is not a LeftHandSideExpression (a UnaryExpression, an
+  // AwaitExpression, or a YieldExpression). Those can never receive a member/call/template tail, but they can end
+  // in a token that starts one when their argument ended in a postfix update (`delete a++ .b`, since any other
+  // argument consumes its own tail). The next parseValueTail checks it and leaves the pending token alone so ASI
+  // can still apply to it (`delete a++\n[b]` is two statements).
+  // This records the offset of the pending token rather than a boolean, which is what keeps the state from leaking
+  // to a value that did not set it. The parser never backtracks so the token offset only ever moves forward, which
+  // makes a stale state unable to ever match again: parsing anything at all invalidates it. That matters because a
+  // construct _wrapping_ such a value can have a tail of its own (`[typeof a].b`, `(delete a++).b`) and it always
+  // consumed its closing token before parsing that tail.
+  let valueWasNotLhseAtOffset = -1;
   // ES2022 moved the duplicate `__proto__` early error from Annex B.3.1 into the main body (13.2.5.1), so from
   // es13 on it applies in every mode; when targeting ES2021 or lower it is Annex B and only applies in webcompat mode.
   let checkDupProto = (targetEsVersion >= VERSION_DUP_PROTO_MAIN || targetEsVersion === VERSION_WHATEVER) || options_webCompat === WEB_COMPAT_ON;
@@ -808,7 +819,15 @@ function Parser(code, options = {}) {
     // `function* g() { class C { x = yield; } }` — yield is an identifier, not YieldExpression
     // new.target is allowed in a field initializer (evaluates to undefined at runtime), like a static block.
     // - `class C { t = new.target === undefined; }`         ok, new.target is allowed
-    let fieldFlags = sansFlag(lexerFlags, LF_IN_ASYNC | LF_IN_GENERATOR) | LF_IN_CLASS_FIELD_INIT | LF_CAN_NEW_DOT_TARGET;
+    // A FieldDefinition may not Contain a SuperCall, not even through an arrow (which does not rebind `super`). A
+    // nested class sets the flag again for its own derived constructor, and `super.x` has its own flag, so both of
+    // those keep working.
+    // - `class A extends B { x = super() }` and `x = () => super()` are errors, `x = super.y` is not
+    // The Initializer is parsed with [~Await], so top-level await does not reach into it either. That is what
+    // dropping LF_NOT_IN_FUNC does: the initializer is a function boundary, just like a function body.
+    // - `class A { x = await 1 }` is an error in a module, while `class A { [await 1] = 1 }` is not (the computed
+    //   key is evaluated in class scope, which does keep top-level await)
+    let fieldFlags = sansFlag(lexerFlags, LF_IN_ASYNC | LF_IN_GENERATOR | LF_SUPER_CALL | LF_NOT_IN_FUNC) | LF_NO_ARGUMENTS | LF_CAN_NEW_DOT_TARGET;
     let $tp_value_start = tok_getStart();
     let $tp_value_line = tok_getLine();
     let $tp_value_column = tok_getColumn();
@@ -1463,6 +1482,18 @@ function Parser(code, options = {}) {
       return THROW_RANGE('Can only increment or decrement an identifier or member expression', tok_getStart(), tok_getStop());
     }
   }
+  // <SCRUB DEV>
+  function ASSERT_valueCanNotHaveTail(astProp) {
+    // Guard rail for `valueWasNotLhseAtOffset`: the state may only ever suppress the tail of the very value that set
+    // it, which is always a unary, await, or yield expression. If a future caller parses a value head without letting
+    // the tail parser see it, and the token happens not to have moved, this fires instead of silently swallowing a
+    // legal tail (which is how `[typeof a].b` once broke).
+    let head = _path[_path.length - 1];
+    let node = head && head[astProp];
+    if (node instanceof Array) node = node[node.length - 1];
+    return !node || node.type === 'UnaryExpression' || node.type === 'AwaitExpression' || node.type === 'YieldExpression';
+  }
+  // </SCRUB DEV>
   function AST_patchAsyncCall($tp_async_start, $tp_async_stop, $tp_async_line, $tp_async_column, $tp_async_canon, astProp) {
     ASSERT(AST_patchAsyncCall.length === arguments.length, 'arg count');
 
@@ -3641,7 +3672,7 @@ function Parser(code, options = {}) {
       | LF_SUPER_PROP
       | LF_SUPER_CALL
       | LF_IN_CLASS_BODY // nested functions/arrows can still use #x in obj if inside a class
-      | LF_IN_CLASS_FIELD_INIT // preserved for arrows; cleared for regular functions below
+      | LF_NO_ARGUMENTS // preserved for arrows; cleared for regular functions below
     );
 
     // the function name can inherit this state from the enclosing scope but all other parts of a function will
@@ -3656,11 +3687,12 @@ function Parser(code, options = {}) {
     // dont remove the template flag here! let curly pair structures deal with this individually (fixes arrows)
     if (funcType === NOT_ARROW) {
       lexerFlags = lexerFlags | LF_CAN_NEW_DOT_TARGET;
-      // `arguments` is valid inside regular functions, even when nested in a class field init
+      // `arguments` is valid inside regular functions, even when nested in a class field init or a static block
       // - `class C { x = function() { return arguments; } }`
+      // - `class C { static { (function(){ return arguments; }); } }`
       //                          ^
       //                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-      lexerFlags = lexerFlags & ~LF_IN_CLASS_FIELD_INIT;
+      lexerFlags = lexerFlags & ~LF_NO_ARGUMENTS;
     }
 
     return lexerFlags;
@@ -4364,6 +4396,7 @@ function Parser(code, options = {}) {
 
     // See tests/testcases/await/function_piggy/autogen.md
     // See tests/testcases/await/arrow_piggy/autogen.md
+    valueWasNotLhseAtOffset = tok_getStart(); // An AwaitExpression can not have a member/call/template tail
     return NOT_ASSIGNABLE | PIGGY_BACK_SAW_AWAIT;
   }
   function parseAwaitVar(lexerFlags, $tp_await_start, $tp_await_stop, $tp_await_line, $tp_await_column, $tp_await_type, $tp_await_canon, isNewArg, allowAssignment, astProp) {
@@ -4455,18 +4488,36 @@ function Parser(code, options = {}) {
     // - `function f() { class C { static { return; } } }`   error, return is not allowed
     // new.target is allowed in static blocks (evaluates to undefined at runtime)
     // - `class C { static { new.target; } }`                 ok, new.target is allowed
-    let lexerFlagsNoTemplate = sansFlag(lexerFlags, LF_IN_TEMPLATE | LF_NO_ASI | LF_IN_SWITCH | LF_IN_ITERATION | LF_IN_GENERATOR) | LF_IN_ASYNC | LF_IN_STATIC_BLOCK | LF_CAN_NEW_DOT_TARGET;
+    // Contains SuperCall: `super()` is never allowed, not even when the class has a heritage (only a constructor can)
+    // - `class C extends D { static { super(); } }`          error, but `super.x` is fine (LF_SUPER_PROP is kept)
+    // ContainsArguments: `arguments` is an early error here, exactly like in a class field initializer. It carries
+    // into arrows and stops at regular functions, which is what LF_NO_ARGUMENTS does.
+    // - `class C { static { arguments; } }`                  error
+    // - `class C { static { () => arguments; } }`            error, an arrow has no `arguments` of its own
+    // - `class C { static { function f(){ arguments; } } }`  ok, the function has its own `arguments`
+    // LF_IN_GLOBAL is dropped because the block is its own var scope, not the global one, so a top level function
+    // declaration in it must be var-like (see the FDS_VAR below and parseFunctionAfterKeyword).
+    let lexerFlagsNoTemplate = sansFlag(lexerFlags, LF_IN_TEMPLATE | LF_NO_ASI | LF_IN_GLOBAL | LF_IN_SWITCH | LF_IN_ITERATION | LF_IN_GENERATOR | LF_SUPER_CALL) | LF_IN_ASYNC | LF_IN_STATIC_BLOCK | LF_CAN_NEW_DOT_TARGET | LF_NO_ARGUMENTS;
     let $tp_curly_start = tok_getStart();
     let $tp_curly_line = tok_getLine();
     let $tp_curly_column = tok_getColumn();
     ASSERT_skipToStatementStart($PUNC_CURLY_OPEN, lexerFlagsNoTemplate);
-    let scoop = (enclosingScoop != null && enclosingScoop !== DO_NOT_BIND && enclosingScoop.isScope)
-      ? SCOPE_addLayer(enclosingScoop, SCOPE_LAYER_BLOCK, 'StaticBlock')
-      : (SCOPE_addLayer(SCOPE_createGlobal('StaticBlock'), SCOPE_LAYER_BLOCK, 'StaticBlock'));
+    // A static block has its own variable scope; it is evaluated as the body of a synthetic method, so a `var` (or a
+    // top level function declaration) inside it belongs to the block and does not reach the enclosing scope at all.
+    // Hence the FUNC_ROOT layer (which stops var hoisting) with the actual block layer on top of it, mirroring how a
+    // function body sits inside its own func root.
+    // - `let x; class C { static { var x; } }`               ok, they are different scopes
+    // - `class C { static { let x; var x; } }`               error, they are the same scope
+    let staticBlockRoot = (enclosingScoop != null && enclosingScoop !== DO_NOT_BIND && enclosingScoop.isScope)
+      ? SCOPE_addLayer(enclosingScoop, SCOPE_LAYER_FUNC_ROOT, 'StaticBlockRoot')
+      : (SCOPE_addLayer(SCOPE_createGlobal('StaticBlock'), SCOPE_LAYER_FUNC_ROOT, 'StaticBlockRoot'));
+    let scoop = SCOPE_addLayer(staticBlockRoot, SCOPE_LAYER_BLOCK, 'StaticBlock');
     AST_open(astProp, { type: 'StaticBlock', loc: undefined, body: [] });
     if (options_exposeScopes) AST_set('$scope', scoop);
     while (tok_getType() !== $PUNC_CURLY_CLOSE) {
-      parseNestedBodyPart(lexerFlagsNoTemplate, scoop, EMPTY_LABEL_SET, NOT_LABELLED, FDS_LEX, PARENT_NOT_LABEL, 'body');
+      // FDS_VAR: the top level of a static block is a function-body-like scope so function declarations are var-like
+      // - `class C { static { function f(){} function f(){} } }`   ok, both are var scoped
+      parseNestedBodyPart(lexerFlagsNoTemplate, scoop, EMPTY_LABEL_SET, NOT_LABELLED, FDS_VAR, PARENT_NOT_LABEL, 'body');
     }
     // Back in the class body after the static block: the next token is a class element key (may be `*` `#` `[`
     // `get` `static` `;` `}`), not a statement start. Consume the `}` with skipDiv like a method body does, else a
@@ -5059,9 +5110,12 @@ function Parser(code, options = {}) {
       let hasStringLocal = parseExportObject(lexerFlags, tmpExportedNames, tmpExportedBindings);
 
       if (tok_getType() === $ID_from) {
-        // drop the tmp lists
+        // The local names of a re-export are bindings of the _other_ module, so they must not be verified as
+        // bindings of this one (`export {undeclared} from "x"` is fine). The exported names do count towards
+        // ExportedNames, which must not contain duplicates, so those still go into the real set.
+        // - `export {a as n} from "x"; export let n` exports `n` twice
+        tmpExportedNames.forEach(name => addNameToExports(exportedNames, $tp_export_start, $tp_export_stop, name));
         ASSERT_skipToStringOrDie($ID_from, lexerFlags);
-        // TODO: what happens to dupe exported bindings or exported names here?
 
         let $tp_from_line = tok_getLine();
         let $tp_from_column = tok_getColumn();
@@ -5853,6 +5907,13 @@ function Parser(code, options = {}) {
 
     ASSERT_skipDiv($ID_using, lexerFlags);
 
+    // An `await using` declaration contains an await, and ContainsAwait of a ClassStaticBlockStatementList is an
+    // early error, same as for `for await` and a plain await expression.
+    // - `class C { static { for (await using x of y); } }`
+    if (hasAnyFlag(lexerFlags, LF_IN_STATIC_BLOCK)) {
+      return THROW_RANGE('Cannot use `await using` in a static block', $tp_awaitIdent_start, tok_getStop());
+    }
+
     // Note: destructuring patterns ({, [) are not allowed with `await using` declarations (only BindingIdentifier)
     if (!isIdentToken(tok_getType()) || tok_getNlwas() === true) {
       return THROW_RANGE('`await using` in for-header must be followed by a binding identifier', tok_getStart(), tok_getStop());
@@ -6357,6 +6418,13 @@ function Parser(code, options = {}) {
       // This can be fine if inside a regular `for-loop`. Only if we see `in` or `of` before the `;` are we in trouble.
       parseExpressionFromOp(lexerFlags| LF_IN_FOR_LHS, $tp_patternStart_start, $tp_patternStart_stop, $tp_patternStart_line, $tp_patternStart_column, assignable, astProp);
 
+      if (tok_getType() === $PUNC_COMMA) {
+        // The init of a `for(;;)` is an Expression, so a comma continues it as a sequence. (Keep LF_IN_FOR_LHS: the
+        // init is an `Expression[~In]`, so an unparenthesized `in` stays illegal for the rest of it too.)
+        // - `for ([] = x, y;;);` is a sequence, while `for ([] = x, y in z;;);` is still an error
+        _parseExpressions(lexerFlags | LF_IN_FOR_LHS, $tp_patternStart_start, $tp_patternStart_line, $tp_patternStart_column, assignable, astProp);
+      }
+
       if (tok_getType() === $PUNC_SEMI) {
         // This is fiiiine
         // - `for ([] = x ;;);`
@@ -6408,7 +6476,9 @@ function Parser(code, options = {}) {
       // Don't care about assignable await/yield flags
       // [v]: `for ([], x;;);`
       //              ^
-      _parseExpressions(lexerFlags, $tp_patternStart_start, $tp_patternStart_line, $tp_patternStart_column, NOT_ASSIGNABLE, astProp);
+      // Keep LF_IN_FOR_LHS: the init is an `Expression[~In]`, so an unparenthesized `in` stays illegal in the rest
+      // of the sequence too. - `for ([], y in z;;);` is an error, `for ([], (y in z);;);` is not
+      _parseExpressions(lexerFlags | LF_IN_FOR_LHS, $tp_patternStart_start, $tp_patternStart_line, $tp_patternStart_column, NOT_ASSIGNABLE, astProp);
     }
 
     if (tok_getType() === $PUNC_SEMI) {
@@ -7085,6 +7155,12 @@ function Parser(code, options = {}) {
     // `await using` is a declaration when followed by an ident on the same line (no newline after `using`)
     // Note: destructuring patterns ({, [) are not allowed with `await using` declarations (only BindingIdentifier)
     if (isIdentToken(tok_getType()) && tok_getNlwas() === false) {
+      // An `await using` declaration contains an await, and ContainsAwait of a ClassStaticBlockStatementList is an
+      // early error, same as for `for await` and a plain await expression.
+      // - `class C { static { await using x = y; } }`
+      if (hasAnyFlag(lexerFlags, LF_IN_STATIC_BLOCK)) {
+        return THROW_RANGE('Cannot use `await using` in a static block', $tp_await_start, $tp_using_stop);
+      }
       parseAnyVarDeclaration(lexerFlags, $tp_await_start, $tp_await_line, $tp_await_column, scoop, BINDING_TYPE_AWAIT_USING, FROM_STATEMENT_START, UNDEF_EXPORTS, UNDEF_EXPORTS, astProp);
     }
     else {
@@ -8976,6 +9052,7 @@ function Parser(code, options = {}) {
     ASSERT(isIdentToken($tp_ident_type), 'should have consumed token. make sure you checked whether the token after can be div or regex...');
     ASSERT($tp_ident_start !== tok_getStart(), 'should have consumed this');
     ASSERT(typeof astProp === 'string', 'astprop string', astProp);
+
     ASSERT_ASSIGN_EXPR(allowAssignment);
     ASSERT(isNewArg === NOT_NEW_ARG || allowAssignment === ASSIGN_EXPR_IS_ERROR, 'new arg does not allow assignments');
     ASSERT_BINDING_TYPE(bindingType);
@@ -8993,10 +9070,12 @@ function Parser(code, options = {}) {
         // - `class C { x = () => arguments; }`                error: arrow inherits field init scope
         // - `class C { x = function() { arguments; } }`       ok: regular function has own `arguments`
         // - `function f() { class C { x = arguments; } }`     error: the `arguments` is NOT scoped to the outer func
-        if (hasAllFlags(lexerFlags, LF_IN_CLASS_FIELD_INIT)) {
-          // Note: The spec has an explicit early error here (ContainsArguments of Initializer is true -> early error).
-          //       Reject in all modes. (The init will run in a special function so it does not inherit from outer funcs either)
-          return THROW_RANGE('Cannot reference `arguments` in class field initializer', $tp_ident_start, $tp_ident_stop);
+        // - `class C { static { arguments; } }`               error: ContainsArguments in a static block, same rule
+        if (hasAllFlags(lexerFlags, LF_NO_ARGUMENTS)) {
+          // Note: The spec has an explicit early error here (ContainsArguments of Initializer / of
+          //       ClassStaticBlockStatementList is true -> early error).
+          //       Reject in all modes. (Both run in a special function so they do not inherit from outer funcs either)
+          return THROW_RANGE('Cannot reference `arguments` in a class field initializer or class static block', $tp_ident_start, $tp_ident_stop);
         }
         if (tok_getType() === $PUNC_EQ_GT) {
           if (hasAllFlags(lexerFlags, LF_STRICT_MODE)) {
@@ -9491,7 +9570,12 @@ function Parser(code, options = {}) {
       // Cannot delete private props either
       // - `class C { #x; m(){ delete this.#x; } }`          // error: delete private field
       // - `class C { #m; x = delete (g().#m); }`             // error: delete private field (covered)
-      if (deleteArg.type === 'MemberExpression' && deleteArg.property.type === 'PrivateIdentifier') {
+      // An optional chain is wrapped in a ChainExpression, so check the outermost link of that chain too
+      // - `class C { #x; m(o){ delete o?.#x; } }`             // error: the chain ends in the private field
+      // - `class C { #x; m(o){ delete o?.b.#x; } }`           // error: idem
+      // - `class C { #x; m(o){ delete o?.#x.b; } }`           // fine: the chain ends in a public prop
+      let deleteTarget = deleteArg.type === 'ChainExpression' ? deleteArg.expression : deleteArg;
+      if (deleteTarget.type === 'MemberExpression' && deleteTarget.property.type === 'PrivateIdentifier') {
         return THROW_RANGE('Deleting a private field is a syntax error', $tp_unary_start, $tp_unary_stop);
       }
     }
@@ -9504,6 +9588,7 @@ function Parser(code, options = {}) {
       // [x]: `typeof 3 ** 2;`
       return THROW_RANGE('The lhs of ** can not be this kind of unary expression (syntactically not allowed, you have to wrap something)', tok_getStart(), tok_getStop());
     }
+    valueWasNotLhseAtOffset = tok_getStart(); // A UnaryExpression can not have a member/call/template tail
     return setNotAssignable(assignable);
   }
   function parseUpdatePrefix(lexerFlags, isNewArg, leftHandSideExpression, opName, astProp) {
@@ -9543,6 +9628,27 @@ function Parser(code, options = {}) {
       prefix: true,
     });
     let assignable = parseValue(lexerFlags, ASSIGN_EXPR_IS_ERROR, NOT_NEW_ARG, NOT_LHSE, 'argument');
+
+    // <SCRUB AST>
+    // The arg must be a simple assignment target. An update/unary/await/yield expression is not, and it can not take
+    // a member or call tail either, so the tail parser below must not get the chance to turn one into a
+    // MemberExpression (`--a--[b].b` is not `--((a--)[b].b)`). Note that the arg only ends up being one of these
+    // when it ended in a postfix update, since any other value consumes its own tail.
+    // - `--a--[b].b`  - `++a.b++.b`  - `--typeof a++.b`
+    let updateArgSoFar = _path[_path.length - 1].argument;
+    if (
+      updateArgSoFar &&
+      (
+        updateArgSoFar.type === 'UpdateExpression' ||
+        updateArgSoFar.type === 'UnaryExpression' ||
+        updateArgSoFar.type === 'AwaitExpression' ||
+        updateArgSoFar.type === 'YieldExpression'
+      )
+    ) {
+      return THROW_RANGE('Can only increment or decrement an identifier or member expression', $tp_punc_start, $tp_punc_stop);
+    }
+    // </SCRUB AST>
+
     assignable = parseValueTail(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, assignable, NOT_NEW_ARG, ONLY_LHSE, 'argument');
 
     AST_throwIfIllegalUpdateArg(lexerFlags, 'argument');
@@ -9626,6 +9732,7 @@ function Parser(code, options = {}) {
       return THROW_RANGE('Can not have a `yield` expression on the left side of a ternary', $tp_yield_start, $tp_yield_stop);
     }
 
+    valueWasNotLhseAtOffset = tok_getStart(); // A YieldExpression can not have a member/call/template tail
     return NOT_ASSIGNABLE | PIGGY_BACK_SAW_YIELD;
   }
   function parseYieldStarArgument(lexerFlags, $tp_yield_start, astProp) {
@@ -9912,6 +10019,18 @@ function Parser(code, options = {}) {
     // In ONLY_LHSE (e.g. operand of ++/--) we must parse full LHS including ._ tail; PIGGY_BACK_WAS_ARROW only skips tail when NOT_LHSE
     if (hasAllFlags(assignable, PIGGY_BACK_WAS_ARROW) && leftHandSideExpression === NOT_LHSE) return assignable;
 
+    // The value that was just parsed is a UnaryExpression, AwaitExpression, or YieldExpression. Those are not a
+    // MemberExpression so they can not take a member, call, or template tail at all. This can only happen when their
+    // argument ended in a postfix update, since any other argument consumes its own tail. Leave the pending token
+    // alone so that the caller can still apply ASI to it (`delete a++\n[b]` is two statements).
+    // The offset must still be the pending token; if anything was parsed since, this state is stale and not ours.
+    // - `delete a++.b`  - `typeof a--[b]`  - `[typeof a--.c]`  - `async function f(){ await a++.b }`
+    if (valueWasNotLhseAtOffset === tok_getStart()) {
+      ASSERT(ASSERT_valueCanNotHaveTail(astProp), 'the no-tail state must belong to the value that ends here', astProp);
+      valueWasNotLhseAtOffset = -1;
+      return assignable;
+    }
+
     switch (tok_getType()) {
       case $PUNC_DOT: // niet nodig
         return _parseValueTailDotProperty(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, assignable, isNewArg, NOT_OPTIONAL, astProp);
@@ -10103,11 +10222,15 @@ function Parser(code, options = {}) {
     let $tp_propExpr_start = tok_getStart();
     let $tp_propExpr_line = tok_getLine();
     let $tp_propExpr_column = tok_getColumn();
-    let nowAssignable = parseExpressions(sansFlag(lexerFlags | LF_NO_ASI, LF_IN_FOR_LHS | LF_IN_GLOBAL | LF_IN_SWITCH | LF_IN_ITERATION), 'property');
+    // The key is a fresh expression, it is not part of the optional chain that may contain it. So drop LF_CHAINING;
+    // a tagged template is fine here and a chain of its own gets to inject its own `ChainExpression` node.
+    // - `a?.[b`c`]`  - `a?.[b?.c]`
+    let innerLexerFlags = sansFlag(lexerFlags, LF_CHAINING);
+    let nowAssignable = parseExpressions(sansFlag(innerLexerFlags | LF_NO_ASI, LF_IN_FOR_LHS | LF_IN_GLOBAL | LF_IN_SWITCH | LF_IN_ITERATION), 'property');
     // - `foo[await bar]`  - `a[{...()=>{}}.m()]`  expression can have tail (.m(), etc)
     assignable = mergeAssignable(nowAssignable, assignable);
     assignable = sansFlag(assignable, PIGGY_BACK_WAS_ARROW);
-    assignable = parseValueTail(lexerFlags, $tp_propExpr_start, $tp_propExpr_line, $tp_propExpr_column, assignable, NOT_NEW_ARG, NOT_LHSE, 'property');
+    assignable = parseValueTail(innerLexerFlags, $tp_propExpr_start, $tp_propExpr_line, $tp_propExpr_column, assignable, NOT_NEW_ARG, NOT_LHSE, 'property');
 
     if (tok_getType() !== $PUNC_BRACKET_CLOSE) {
       return THROW_RANGE('Expected the closing bracket `]` for a dynamic property, found `' + tok_sliceInput(tok_getStart(), tok_getStop()) + '` instead', tok_getStart(), tok_getStop());
@@ -10153,7 +10276,10 @@ function Parser(code, options = {}) {
     // https://tc39.es/ecma262/#sec-runtime-errors-for-function-call-assignment-targets
     // In every ratified edition (ES2015-ES2025) the AssignmentTargetType of a call is invalid, so without the
     // web-compat gate (or when targeting es<=16) the call is simply not assignable at all.
-    let callAssignable = (allowCallAssignmentTarget && hasNoFlag(lexerFlags, LF_STRICT_MODE)) ? (assignable | CANT_DESTRUCT) : setNotAssignable(assignable);
+    // Note: `assignable` was merged with the assignability of the _args_, which says nothing about the call itself.
+    // So explicitly (un)set the assignable state here rather than riding whatever the last arg happened to be.
+    // - `f(function(){})++`  (the arg is not assignable but the call still is, in sloppy web-compat)
+    let callAssignable = (allowCallAssignmentTarget && hasNoFlag(lexerFlags, LF_STRICT_MODE)) ? (setAssignable(assignable) | CANT_DESTRUCT) : setNotAssignable(assignable);
     return parseValueTail(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, callAssignable, isNewArg, NOT_LHSE, astProp);
   }
   function _parseValueTailTemplate(lexerFlags, $tp_valueFirst_start, $tp_valueFirst_line, $tp_valueFirst_column, assignable, isNewArg, astProp) {
@@ -10229,12 +10355,6 @@ function Parser(code, options = {}) {
     let $tp_op_start = tok_getStart();
     let $tp_op_stop = tok_getStop();
 
-    if (leftHandSideExpression === ONLY_LHSE) {
-      // [x]: `class x extends ++y {}`
-      //                       ^^
-      return THROW_RANGE('A `' + opName + '` update expression is not allowed here', $tp_op_start, $tp_op_stop);
-    }
-
     // if there is a newline between the previous value and UpdateExpression (++ or --) then it is not postfix
     // https://tc39.github.io/ecma262/#sec-rules-of-automatic-semicolon-insertion
     // https://tc39.github.io/ecma262/#prod-UpdateExpression
@@ -10257,6 +10377,23 @@ function Parser(code, options = {}) {
         return THROW_RANGE('The postfix `' + opName + '` is a restricted production so ASI must apply but that is not valid in this context', $tp_op_start, $tp_op_stop);
       }
       return assignable;
+    }
+
+    // The value can not take a postfix tail at all here (the caller wants a LeftHandSideExpression). Like the chain
+    // check below this must come _after_ the newline check, because ASI still applies: the `++` of `++a \n ++b` is
+    // not a postfix operator on `++a`, it starts a new statement.
+    // - `class x extends y++ {}` is an error, `++a \n ++b` is not
+    if (leftHandSideExpression === ONLY_LHSE) {
+      return THROW_RANGE('A `' + opName + '` update expression is not allowed here', $tp_op_start, $tp_op_stop);
+    }
+
+    // The AssignmentTargetType of an OptionalExpression is always invalid, even for a plain member tail like the `.c`
+    // in `a?.b.c` and even in web-compat sloppy mode. The tail is parsed before the chain marks itself as not
+    // assignable, so the LF_CHAINING state is what tells us the value is (part of) an optional chain here.
+    // - `a?.b.c++`  - `a?.(b)--`  - `a?.b?.[c]++`
+    // (Note: this must be checked _after_ the newline check because ASI still applies: `a?.b.c\n++x` is fine)
+    if (hasAnyFlag(lexerFlags, LF_CHAINING)) {
+      return THROW_RANGE('The postfix `' + opName + '` cannot be applied to an optional chain', $tp_op_start, $tp_op_stop);
     }
 
     // check for this _after_ the newline check, for cases like
@@ -10282,7 +10419,10 @@ function Parser(code, options = {}) {
   function parseCallArgs(lexerFlags, astProp) {
     ASSERT_skipToExpressionStartGrouped($PUNC_PAREN_OPEN, lexerFlags);
     // [v]: `for (x(y in z);;);`
-    lexerFlags = sansFlag(lexerFlags | LF_NO_ASI, LF_IN_FOR_LHS);
+    // The args are fresh expressions, they are not part of the optional chain that may contain the call. So drop
+    // LF_CHAINING; a tagged template is fine here and a chain of its own gets to inject its own `ChainExpression`.
+    // - `a?.(b`c`)`  - `a?.(b?.c)`
+    lexerFlags = sansFlag(lexerFlags | LF_NO_ASI, LF_IN_FOR_LHS | LF_CHAINING);
 
     let assignable = ASSIGNABLE_UNDETERMINED;
     if (tok_getType() === $PUNC_PAREN_CLOSE) {
@@ -11824,6 +11964,7 @@ function Parser(code, options = {}) {
 
           // This value is not destructible on its own as there is no ident+more value body that is destructible
           // The optional tail may change this if it is a member expression
+          // - `[typeof a--.c]`   (the element is a unary expression so it may not receive that `.c` tail)
           let nowDestruct = parseOptionalDestructibleRestOfExpression(lexerFlags, $tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, leftAssignable, CANT_DESTRUCT, $PUNC_BRACKET_CLOSE, astProp);
           // We can ignore assignability here because the await/yield flags from the last call will be inside the destruct
           destructible |= nowDestruct;
@@ -11966,7 +12107,11 @@ function Parser(code, options = {}) {
             // pick up the flags from assignable and put them in destructible
             // - `= await bar`
             // - `= yield`
-            destructible |= parseExpression(lexerFlags, 'right'); // save the piggies!
+            // Only the piggies: the Initializer of an AssignmentElement is any AssignmentExpression, so whether it
+            // could itself be destructured says nothing about this element. A call tail rides CANT_DESTRUCT in the
+            // assignable, which would otherwise poison the whole pattern.
+            // - `[(8)[b] = c()] = d` destructures fine even though `c()` can not
+            destructible |= getPiggies(parseExpression(lexerFlags, 'right')); // save the piggies!
             AST_close($tp_elementStart_start, $tp_elementStart_line, $tp_elementStart_column, 'AssignmentExpression');
           } else {
             // - `[2=x]`
@@ -11983,11 +12128,15 @@ function Parser(code, options = {}) {
           assignable = setNotAssignable(assignable);
           destructible |= CANT_DESTRUCT;
         }
-        else if (wasParen && isAssignable(assignable) && (bindingType === BINDING_TYPE_NONE || bindingType === BINDING_TYPE_ARG)) {
+        // Note: a web-compat call tail (`[0(b)]`) is assignable but rides CANT_DESTRUCT: it is a valid simple
+        // assignment target yet never a destructuring target.
+        // - `[0(b)] = y`
+        // - `[(x())] = y`
+        else if (wasParen && isAssignable(assignable) && hasNoFlag(assignable, CANT_DESTRUCT) && (bindingType === BINDING_TYPE_NONE || bindingType === BINDING_TYPE_ARG)) {
           // - `[(x)] = obj`
           destructible |=  DESTRUCT_ASSIGN_ONLY;
         }
-        else if (wasParen || notAssignable(assignable)) {
+        else if (wasParen || notAssignable(assignable) || hasAllFlags(assignable, CANT_DESTRUCT)) {
           // - `let [(x)] = obj`
           //            ^
           // - `[x()] = obj`
@@ -12610,9 +12759,14 @@ function Parser(code, options = {}) {
       // Value must have a tail and it is not (immediately) an assignment. At this point, only assign or cant destruct.
       let exprAssignable = parseValueTail(lexerFlags, $tp_start_start, $tp_start_line, $tp_start_column, objAssignable, NOT_NEW_ARG, NOT_LHSE, 'value');
       let wasAssignment = tok_getType() === $PUNC_EQ; // An assignment is destructible
+      let cantDestruct = hasAllFlags(exprAssignable, CANT_DESTRUCT); // Riding a web-compat call tail
       exprAssignable = parseExpressionFromOp(lexerFlags, $tp_start_start, $tp_start_stop, $tp_start_line, $tp_start_column, exprAssignable, 'value');
 
-      if (wasAssignment || isAssignable(exprAssignable)) {
+      // A web-compat call tail (`{a: [b].c(d)}`) is assignable but rides CANT_DESTRUCT: it is a valid simple
+      // assignment target yet never a destructuring target, not even with a default.
+      // - `({a: [b].c(d)} = x)`
+      // - `({a: [b].c(d) = e} = x)`
+      if (!cantDestruct && (wasAssignment || isAssignable(exprAssignable))) {
         return DESTRUCT_ASSIGN_ONLY | getPiggies(exprAssignable);
       }
 
@@ -12647,9 +12801,14 @@ function Parser(code, options = {}) {
       // Value must have a tail and it is not (immediately) an assignment. At this point, only assign or cant destruct.
       let exprAssignable = parseValueTail(lexerFlags, $tp_start_start, $tp_start_line, $tp_start_column, objAssignable, NOT_NEW_ARG, NOT_LHSE, 'value');
       let wasAssignment = tok_getType() === $PUNC_EQ; // An assignment is destructible
+      let cantDestruct = hasAllFlags(exprAssignable, CANT_DESTRUCT); // Riding a web-compat call tail
       exprAssignable = parseExpressionFromOp(lexerFlags, $tp_start_start, $tp_start_stop, $tp_start_line, $tp_start_column, exprAssignable, 'value');
 
-      if (wasAssignment || isAssignable(exprAssignable)) {
+      // A web-compat call tail (`{a: [b].c(d)}`) is assignable but rides CANT_DESTRUCT: it is a valid simple
+      // assignment target yet never a destructuring target, not even with a default.
+      // - `({a: [b].c(d)} = x)`
+      // - `({a: [b].c(d) = e} = x)`
+      if (!cantDestruct && (wasAssignment || isAssignable(exprAssignable))) {
         return DESTRUCT_ASSIGN_ONLY | getPiggies(exprAssignable);
       }
 
@@ -12675,13 +12834,18 @@ function Parser(code, options = {}) {
     // Whatever the value, it may have a tail (like a property or call) which we must validate first
 
     let wasAssignment = tok_getType() === $PUNC_EQ; // An assignment is destructible
+    let cantDestruct = hasAllFlags(valueAssignable, CANT_DESTRUCT); // Riding a web-compat call tail
 
     valueAssignable = parseExpressionFromOp(lexerFlags, $tp_start_start, $tp_start_stop, $tp_start_line, $tp_start_column, valueAssignable, 'value');
 
     // At this point, an assignment implies the whole thing can at best be a destruct assignment (but no longer
     // an arrow for example). If it wasn't an assignment and it wasn't assignable, then it's also not destructible.
 
-    if (wasAssignment || isAssignable(valueAssignable)) {
+    // A web-compat call tail (`{a: "b".c(d)}`) is assignable but rides CANT_DESTRUCT: it is a valid simple
+    // assignment target yet never a destructuring target, not even with a default.
+    // - `({a: "b".c(d)} = x)`
+    // - `({a: "b".c(d) = e} = x)`
+    if (!cantDestruct && (wasAssignment || isAssignable(valueAssignable))) {
       return DESTRUCT_ASSIGN_ONLY | getPiggies(valueAssignable);
     }
 
@@ -12900,6 +13064,14 @@ function Parser(code, options = {}) {
     // their validity. This makes the difference between `({x}=y)` and `y={x}` work.
     if (report.length > 0 && $tp_propLeadingIdent_type !== $ID_eval && $tp_propLeadingIdent_type !== $ID_arguments) {
       return THROW_RANGE(report, $tp_propLeadingIdent_start, $tp_propLeadingIdent_stop);
+    }
+
+    // A shorthand is an IdentifierReference, so ContainsArguments applies to it just as much as to a regular
+    // reference (which is checked in parseValueHeadBodyAfterIdent). As a pattern it is a strict mode error anyway.
+    // - `class C { x = ({arguments}); }`
+    // - `class C { static { ({arguments}); } }`
+    if ($tp_propLeadingIdent_type === $ID_arguments && hasAllFlags(lexerFlags, LF_NO_ARGUMENTS)) {
+      return THROW_RANGE('Cannot reference `arguments` in a class field initializer or class static block', $tp_propLeadingIdent_start, $tp_propLeadingIdent_stop);
     }
 
     // If this isn't a binding, this is a noop
@@ -13869,55 +14041,46 @@ function Parser(code, options = {}) {
     let $tp_get_type = $UNTYPED;
     let $tp_set_type = $UNTYPED;
 
+    // A newline before the next token can end a field declaration through ASI. `get` and `set` are the exception:
+    // they still introduce an accessor across a newline, unless what follows can not be an accessor key (a `*`).
+    // `async` is not an exception, even though it is a modifier too: `AsyncMethod :: async [no LineTerminator here]
+    // ClassElementName ...` is a restricted production, so a newline rules that reading out and only the field
+    // remains. (In an object literal there is no field production, so there the same input is an error.)
+    // - `class A { async \n m(){} }` is the field `async` plus the method `m(){}`
+    // - `class A { get \n x(){} }` is a getter, but `class A { get \n *x(){} }` is the field `get` plus a method
+    if (tok_getNlwas() === true && (tok_getType() === $PUNC_STAR || ($tp_ident_type !== $ID_get && $tp_ident_type !== $ID_set))) {
+      let isPrivate = $tp_ident_type === $ID_PRIVATE_IDENT;
+      if (!(isPrivate ? allowPrivateClassFields : allowPublicClassFields)) {
+        return THROW_RANGE('Class field declarations without initializer are not supported in the currently targeted language version', $tp_ident_start, tok_getStop());
+      }
+      checkClassFieldNameErrors(isPrivate, isStatic, $tp_ident_canon, $tp_ident_start, $tp_ident_stop);
+      if (isPrivate) declarePrivateName($tp_ident_canon, PRIVATE_KIND_OTHER, isStatic, $tp_ident_start, $tp_ident_stop);
+      let keyNode = isPrivate
+        ? AST_getPrivateIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon)
+        : AST_getIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon);
+      AST_open(astProp, {
+        type: 'PropertyDefinition',
+        loc: undefined,
+        key: keyNode,
+        value: null,
+        computed: false,
+        static: isStatic,
+      });
+      AST_close($tp_methodStart_start, $tp_methodStart_line, $tp_methodStart_column, 'PropertyDefinition');
+      return CANT_DESTRUCT;
+    }
+
     switch ($tp_ident_type) {
       case $ID_get:
         // The next token may now only be the key
         // - `class x {get key(){}}`
         //                 ^
-        // ASI: if there was a newline and the next token is `*`, treat `get` as a field name
-        // - `class x {get \n *a(){}}` => field `get` + generator method `*a(){}`
-        if (tok_getNlwas() === true && tok_getType() === $PUNC_STAR) {
-          if (!allowPublicClassFields) {
-            return THROW_RANGE('Class field declarations without initializer are not supported in the currently targeted language version', $tp_ident_start, tok_getStop());
-          }
-          checkClassFieldNameErrors(false, isStatic, $tp_ident_canon, $tp_ident_start, $tp_ident_stop);
-          let keyNode = AST_getIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon);
-          AST_open(astProp, {
-            type: 'PropertyDefinition',
-            loc: undefined,
-            key: keyNode,
-            value: null,
-            computed: false,
-            static: isStatic,
-          });
-          AST_close($tp_methodStart_start, $tp_methodStart_line, $tp_methodStart_column, 'PropertyDefinition');
-          return CANT_DESTRUCT;
-        }
         $tp_get_type = $ID_get;
         break;
       case $ID_set:
         // The next token may now only be the key
         // - `class x {set key(v){}}`
         //                 ^
-        // ASI: if there was a newline and the next token is `*`, treat `set` as a field name
-        // - `class x {set \n *a(x){}}` => field `set` + generator method `*a(x){}`
-        if (tok_getNlwas() === true && tok_getType() === $PUNC_STAR) {
-          if (!allowPublicClassFields) {
-            return THROW_RANGE('Class field declarations without initializer are not supported in the currently targeted language version', $tp_ident_start, tok_getStop());
-          }
-          checkClassFieldNameErrors(false, isStatic, $tp_ident_canon, $tp_ident_start, $tp_ident_stop);
-          let keyNode = AST_getIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon);
-          AST_open(astProp, {
-            type: 'PropertyDefinition',
-            loc: undefined,
-            key: keyNode,
-            value: null,
-            computed: false,
-            static: isStatic,
-          });
-          AST_close($tp_methodStart_start, $tp_methodStart_line, $tp_methodStart_column, 'PropertyDefinition');
-          return CANT_DESTRUCT;
-        }
         $tp_set_type = $ID_set;
         break;
       case $ID_async:
@@ -13928,14 +14091,6 @@ function Parser(code, options = {}) {
 
         if (!allowAsyncFunctions) {
           return THROW_RANGE('Async methods are not supported in the currently targeted language version', $tp_methodStart_start, tok_getStop());
-        }
-
-        if (tok_getNlwas() === true) {
-          // - `class x {async \n key(){}}`
-          //              ^
-          // Always an error due to async being a restricted production
-          // Note that `{async(){}}` is legal so we must check the current token
-          return THROW_RANGE('Async methods are a restricted production and cannot have a newline following it', $tp_methodStart_line, tok_getStart());
         }
 
         $tp_async_type = $ID_async;
@@ -13955,29 +14110,7 @@ function Parser(code, options = {}) {
         }
         break;
       default:
-        // Not a modifier (get/set/async). If newline before next token, treat as field with ASI.
-        // - `class C { fieldName \n nextElement }`
-        if (tok_getNlwas() === true) {
-          let isPrivate = $tp_ident_type === $ID_PRIVATE_IDENT;
-          if (!(isPrivate ? allowPrivateClassFields : allowPublicClassFields)) {
-            return THROW_RANGE('Class field declarations without initializer are not supported in the currently targeted language version', $tp_ident_start, tok_getStop());
-          }
-          checkClassFieldNameErrors(isPrivate, isStatic, $tp_ident_canon, $tp_ident_start, $tp_ident_stop);
-          if (isPrivate) declarePrivateName($tp_ident_canon, PRIVATE_KIND_OTHER, isStatic, $tp_ident_start, $tp_ident_stop);
-          let keyNode = isPrivate
-            ? AST_getPrivateIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon)
-            : AST_getIdentNode($tp_ident_start, $tp_ident_stop, $tp_ident_line, $tp_ident_column, $tp_ident_canon);
-          AST_open(astProp, {
-            type: 'PropertyDefinition',
-            loc: undefined,
-            key: keyNode,
-            value: null,
-            computed: false,
-            static: isStatic,
-          });
-          AST_close($tp_methodStart_start, $tp_methodStart_line, $tp_methodStart_column, 'PropertyDefinition');
-          return CANT_DESTRUCT;
-        }
+        // Not a modifier (get/set/async); the field-with-ASI case was handled before the switch.
         return THROW_RANGE('Either the current modifier is unknown or the input that followed was unexpected', tok_getStart(), tok_getStop());
     }
 
@@ -14219,7 +14352,10 @@ function Parser(code, options = {}) {
       return CANT_DESTRUCT;
     }
 
-    if (noModifiers && ($tp_postField_type === $PUNC_SEMI || $tp_postField_type === $PUNC_CURLY_CLOSE || tok_getNlwas() === true)) {
+    // A `(` continues the MethodDefinition (`ClassElementName ( UniqueFormalParameters ) ...` has no
+    // [no LineTerminator here]), so a newline before it is insignificant and ASI must not end a field there.
+    // The ident key path checks for `(` before this same decision. - `class C { [x] \n (){} }` is a method
+    if (noModifiers && ($tp_postField_type === $PUNC_SEMI || $tp_postField_type === $PUNC_CURLY_CLOSE || (tok_getNlwas() === true && $tp_postField_type !== $PUNC_PAREN_OPEN))) {
       // Class field decls without init are relatively special and were not allowed initially
       // - `class C { 'field' }`
       // - `class C { 'field' \n ... }`
@@ -14321,7 +14457,10 @@ function Parser(code, options = {}) {
       return assignable_forPiggies;
     }
 
-    if (noModifiers && ($tp_postField_type === $PUNC_SEMI || $tp_postField_type === $PUNC_CURLY_CLOSE || tok_getNlwas() === true)) {
+    // A `(` continues the MethodDefinition (`ClassElementName ( UniqueFormalParameters ) ...` has no
+    // [no LineTerminator here]), so a newline before it is insignificant and ASI must not end a field there.
+    // The ident key path checks for `(` before this same decision. - `class C { [x] \n (){} }` is a method
+    if (noModifiers && ($tp_postField_type === $PUNC_SEMI || $tp_postField_type === $PUNC_CURLY_CLOSE || (tok_getNlwas() === true && $tp_postField_type !== $PUNC_PAREN_OPEN))) {
       // Computed field without initializer: [expr]; or [expr] <newline> or [expr]}
       // Class fields without init are somewhat special and were not initially allowed
       if (!allowPublicClassFields) {
@@ -14673,9 +14812,10 @@ function Parser(code, options = {}) {
         let assignableOrErrorMsg = nonFatalBindingIdentCheck($tp_ident_type, $tp_ident_start, $tp_ident_stop, $tp_ident_canon, bindingType, lexerFlags);
         ASSERT(typeof assignableOrErrorMsg === 'string', 'func should always return string');
         if (assignableOrErrorMsg.length !== 0) {
-          if (bindingType !== BINDING_TYPE_NONE) {
-            return THROW_RANGE('Cannot use this name (`' + tok_sliceInput($tp_ident_start, $tp_ident_stop) + '`) as a variable name because: ' + assignableOrErrorMsg, $tp_ident_start, $tp_ident_stop);
-          }
+          // Can not throw here, not even for a binding type: the group may still turn out to be a plain expression,
+          // where the spread of a non-assignable value is fine. Only mark it, like the non-simple case below does;
+          // a context that really is a binding rejects it through the destructibility check instead.
+          // - `([...null])` is an array literal with a spread, only `([...null]) => x` is an error
           // - `[...await] = obj`
           // - `[...this];`
           destructible |= CANT_DESTRUCT;
